@@ -5,6 +5,8 @@ import re
 import csv
 import json
 import time
+import uuid
+import threading
 from datetime import datetime
 
 import requests
@@ -17,48 +19,107 @@ API_KEY = os.getenv("OPENROUTER_API_KEY")
 MODEL = "openrouter/free"
 
 CSV_FILE = "results.csv"
-FIELDS = ["target", "name", "role", "company", "email", "phone", "linkedin",
-          "confidence", "notes", "source_url", "found_at"]
 
-MAX_PAGES = 12          # protects your free daily request limit
+# row_id is internal plumbing and is never shown in the table.
+FIELDS = ["row_id", "target", "name", "role", "company", "email", "phone",
+          "linkedin", "contacted", "confidence", "notes", "source_url", "found_at"]
+
+DISPLAY_FIELDS = ["target", "name", "role", "company", "email", "phone",
+                  "linkedin", "confidence", "notes", "source_url", "found_at"]
+
+MAX_PAGES = 12
 PAUSE_SECONDS = 2
+
+# The agent writes from a background thread while the browser reads.
+# This lock stops them from touching the file at the same moment.
+_lock = threading.Lock()
+
+
+# ---------------------------------------------------------------- links
+
+def normalize_linkedin(value):
+    """Turn 'linkedin.com/in/someone?trk=xyz' into 'https://linkedin.com/in/someone'."""
+    v = (value or "").strip()
+    if "linkedin.com/in/" not in v.lower():
+        return ""
+    if not v.lower().startswith(("http://", "https://")):
+        v = "https://" + v.lstrip("/")
+    return v.split("?")[0].rstrip("/")
 
 
 # ---------------------------------------------------------------- storage
 
-def _fix_header_if_old():
-    """If results.csv was written with the older column set, rewrite it with the new one."""
-    if not os.path.exists(CSV_FILE):
-        return
-    with open(CSV_FILE, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        if reader.fieldnames == FIELDS:
-            return
-        old_rows = list(reader)
-    with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDS)
-        writer.writeheader()
-        for row in old_rows:
-            writer.writerow({k: (row.get(k) or "") for k in FIELDS})
-
-
-def read_rows():
-    _fix_header_if_old()
+def _load():
     if not os.path.exists(CSV_FILE):
         return []
     with open(CSV_FILE, newline="", encoding="utf-8") as f:
         return [{k: (row.get(k) or "") for k in FIELDS} for row in csv.DictReader(f)]
 
 
-def append_rows(rows):
-    _fix_header_if_old()
-    file_is_new = not os.path.exists(CSV_FILE)
-    with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
+def _save(rows):
+    with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDS)
-        if file_is_new:
-            writer.writeheader()
+        writer.writeheader()
         for row in rows:
             writer.writerow({k: row.get(k, "") for k in FIELDS})
+
+
+def _migrate(rows):
+    """Give older rows a row_id, a contacted value, and a clean LinkedIn URL."""
+    changed = False
+    for r in rows:
+        if not r.get("row_id"):
+            r["row_id"] = uuid.uuid4().hex[:12]
+            changed = True
+        if r.get("contacted") not in ("yes", "no"):
+            r["contacted"] = "no"
+            changed = True
+        fixed = normalize_linkedin(r.get("linkedin"))
+        if fixed != (r.get("linkedin") or ""):
+            r["linkedin"] = fixed
+            changed = True
+    return changed
+
+
+def read_rows():
+    with _lock:
+        rows = _load()
+        if _migrate(rows):
+            _save(rows)
+        return rows
+
+
+def append_rows(new_rows):
+    with _lock:
+        rows = _load()
+        _migrate(rows)
+        rows.extend(new_rows)
+        _save(rows)
+
+
+def delete_row(row_id):
+    """Remove one row. Returns True if something was actually removed."""
+    with _lock:
+        rows = _load()
+        _migrate(rows)
+        kept = [r for r in rows if r["row_id"] != row_id]
+        if len(kept) == len(rows):
+            return False
+        _save(kept)
+        return True
+
+
+def toggle_contacted(row_id):
+    """Flip the contacted flag between yes and no."""
+    with _lock:
+        rows = _load()
+        _migrate(rows)
+        for r in rows:
+            if r["row_id"] == row_id:
+                r["contacted"] = "no" if r["contacted"] == "yes" else "yes"
+                _save(rows)
+                return r["contacted"]
+        return None
 
 
 # ---------------------------------------------------------------- the LLM
@@ -91,7 +152,7 @@ def parse_json(raw, fallback):
         return fallback
 
 
-# ---------------------------------------------------------------- finding patterns in text
+# ---------------------------------------------------------------- patterns
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 PHONE_RE = re.compile(r"(?:\+\d{1,3}[\s.\-]?)?(?:\(\d{3}\)|\d{3})[\s.\-]\d{3}[\s.\-]\d{4}\b")
@@ -101,7 +162,6 @@ JUNK_EMAIL_PARTS = ("example.com", "yourdomain", "sentry.io", "wixpress", "@2x.p
 
 
 def deobfuscate(text):
-    """Turn 'anurag [at] example [dot] com' into a real address."""
     text = re.sub(r"\s*[\(\[\{]\s*at\s*[\)\]\}]\s*", "@", text, flags=re.I)
     text = re.sub(r"\s*[\(\[\{]\s*dot\s*[\)\]\}]\s*", ".", text, flags=re.I)
     return text
@@ -117,7 +177,7 @@ def find_patterns(text):
     }
 
 
-# ---------------------------------------------------------------- reading pages
+# ---------------------------------------------------------------- pages
 
 def fetch_page(url, max_chars=7000):
     try:
@@ -126,7 +186,6 @@ def fetch_page(url, max_chars=7000):
         for tag in soup(["script", "style", "nav", "footer"]):
             tag.decompose()
 
-        # mailto: and linkedin links hide in href attributes, not visible text
         links = []
         for a in soup.find_all("a", href=True):
             href = a["href"]
@@ -139,7 +198,7 @@ def fetch_page(url, max_chars=7000):
         return ""
 
 
-# ---------------------------------------------------------------- the prompts
+# ---------------------------------------------------------------- prompts
 
 def plan_queries(target):
     prompt = f"""I am looking for the contact details of a PERSON (or people) matching this description:
@@ -201,7 +260,6 @@ GENERIC_PREFIXES = ("info@", "sales@", "support@", "hello@", "contact@", "admin@
 
 
 def validate(person, page_text):
-    """Throw away anything the model made up. Returns the cleaned person, or None."""
     lower_page = page_text.lower()
 
     email = (person.get("email") or "").strip()
@@ -210,9 +268,7 @@ def validate(person, page_text):
             person["email"] = ""
             person["notes"] = ((person.get("notes") or "") + " [email discarded]").strip()
 
-    linkedin = (person.get("linkedin") or "").strip()
-    if linkedin and "linkedin.com/in/" not in linkedin.lower():
-        person["linkedin"] = ""
+    person["linkedin"] = normalize_linkedin(person.get("linkedin"))
 
     if not (person.get("name") or "").strip():
         return None
@@ -256,7 +312,6 @@ def run_agent(target, log=print):
                 continue
             seen_urls.add(url)
 
-            # LinkedIn blocks scrapers — use the search snippet instead of fetching
             if "linkedin.com/in/" in url:
                 text = f"{hit.get('title', '')} {hit.get('body', '')} {url}"
                 log(f"   linkedin result: {url}")
@@ -281,6 +336,8 @@ def run_agent(target, log=print):
                     continue
                 seen_people.add(key)
 
+                person["row_id"] = uuid.uuid4().hex[:12]
+                person["contacted"] = "no"
                 person["target"] = target
                 person["source_url"] = url
                 person["found_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
