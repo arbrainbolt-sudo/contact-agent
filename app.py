@@ -2,6 +2,7 @@
 
 import os
 import threading
+from urllib.parse import urlparse
 
 from flask import Flask, request, redirect, url_for, render_template_string
 
@@ -11,6 +12,52 @@ app = Flask(__name__)
 
 state = {"running": False, "target": "", "log": []}
 
+NO_COMPANY = "__blank__"     # dropdown value for rows with no company
+
+
+# ---------------------------------------------------------------- helpers
+
+def domain_of(url):
+    """'https://www.acme.com/team/bios?x=1'  ->  'acme.com'"""
+    try:
+        host = urlparse(url).netloc.lower()
+        return host[4:] if host.startswith("www.") else (host or url)
+    except Exception:
+        return url
+
+
+app.jinja_env.filters["domain"] = domain_of
+
+
+def company_list(rows):
+    """Every distinct company in the data, sorted, for the dropdown."""
+    names = {(r.get("company") or "").strip() for r in rows}
+    names.discard("")
+    return sorted(names, key=str.lower)
+
+
+def apply_filters(rows, company, q):
+    if company == NO_COMPANY:
+        rows = [r for r in rows if not (r.get("company") or "").strip()]
+    elif company:
+        rows = [r for r in rows if (r.get("company") or "").strip() == company]
+
+    if q:
+        needle = q.strip().lower()
+        rows = [r for r in rows
+                if any(needle in (r.get(f) or "").lower()
+                       for f in contact_agent.DISPLAY_FIELDS)]
+    return rows
+
+
+def back(source):
+    """Return to the home page with the current filters still applied."""
+    params = {k: v for k, v in (("company", source.get("company", "")),
+                                ("q", source.get("q", ""))) if v}
+    return redirect(url_for("home", **params))
+
+
+# ---------------------------------------------------------------- the agent
 
 def log(message):
     print(message)
@@ -26,14 +73,26 @@ def worker(target):
         state["running"] = False
 
 
+# ---------------------------------------------------------------- routes
+
 @app.route("/")
 def home():
-    rows = contact_agent.read_rows()
+    all_rows = contact_agent.read_rows()
+
+    company = request.args.get("company", "")
+    q = request.args.get("q", "")
+    visible = apply_filters(all_rows, company, q)
+
     return render_template_string(
         PAGE,
-        rows=rows,
+        rows=visible,
+        total=len(all_rows),
+        companies=company_list(all_rows),
+        company=company,
+        q=q,
+        no_company=NO_COMPANY,
+        contacted_count=sum(1 for r in visible if r["contacted"] == "yes"),
         fields=contact_agent.DISPLAY_FIELDS,
-        contacted_count=sum(1 for r in rows if r["contacted"] == "yes"),
         state=state,
     )
 
@@ -46,19 +105,19 @@ def run():
         state["target"] = target
         state["log"] = []
         threading.Thread(target=worker, args=(target,), daemon=True).start()
-    return redirect(url_for("home"))
+    return back(request.form)
 
 
 @app.route("/delete/<row_id>", methods=["POST"])
 def delete(row_id):
     contact_agent.delete_row(row_id)
-    return redirect(url_for("home"))
+    return back(request.form)
 
 
 @app.route("/toggle/<row_id>", methods=["POST"])
 def toggle(row_id):
     contact_agent.toggle_contacted(row_id)
-    return redirect(url_for("home"))
+    return back(request.form)
 
 
 @app.route("/clear", methods=["POST"])
@@ -68,6 +127,8 @@ def clear():
     return redirect(url_for("home"))
 
 
+# ---------------------------------------------------------------- the page
+
 PAGE = """
 <!doctype html>
 <html>
@@ -75,25 +136,33 @@ PAGE = """
   <title>Contact Finder</title>
   {% if state.running %}<meta http-equiv="refresh" content="3">{% endif %}
   <style>
-    body { font-family: system-ui, sans-serif; margin: 40px auto; max-width: 1400px; color:#222; }
+    body { font-family: system-ui, sans-serif; margin: 40px auto; max-width: 1500px; color:#222; }
     h1 { font-size: 22px; }
-    input[type=text] { padding: 10px; width: 420px; font-size: 15px; }
+    input[type=text] { padding: 9px; font-size: 15px; }
+    #target { width: 420px; }
+    #q { width: 300px; }
+    select { padding: 9px; font-size: 15px; max-width: 320px; }
+    .filters { background:#f6f7f9; border:1px solid #dfe2e6; padding:14px; margin:22px 0 6px; }
+    .filters label { font-size:13px; color:#555; margin-right:6px; }
     .banner { background:#fff6d9; border:1px solid #e3c96a; padding:12px; margin:18px 0; }
     .log { background:#111; color:#0f0; font-family: monospace; font-size:13px;
            padding:12px; height:180px; overflow:auto; white-space:pre-wrap; }
-    table { border-collapse: collapse; width: 100%; margin-top: 20px; font-size: 14px; }
+    table { border-collapse: collapse; width: 100%; margin-top: 14px; font-size: 14px; }
     th, td { border: 1px solid #ddd; padding: 6px 9px; text-align: left; vertical-align: top; }
     th { background: #f2f2f2; }
     tr.done { background: #eefbee; color:#667; }
     tr.done td a { color:#779; }
-    .muted { color:#777; }
+    .muted { color:#777; font-weight: normal; }
     .iconbtn { border:1px solid #ccc; background:#fff; border-radius:5px; cursor:pointer;
-               font-size:15px; line-height:1; padding:5px 9px; }
+               font-size:15px; line-height:1; padding:6px 10px; }
     .iconbtn:hover { background:#f0f0f0; }
     .tick.on  { background:#2e9c4a; border-color:#2e9c4a; color:#fff; }
     .del:hover { background:#fdeaea; border-color:#d98080; }
     td a { color:#1155cc; }
     form.inline { display:inline; margin:0; }
+    .url { word-break: break-all; font-size:12.5px; max-width:300px; display:inline-block; }
+    .srcname { font-weight:600; }
+    mark { background:#ffe98a; }
   </style>
 </head>
 <body>
@@ -101,7 +170,10 @@ PAGE = """
   <h1>Contact Finder</h1>
 
   <form method="post" action="/run">
-    <input type="text" name="target" placeholder="e.g. VP of Engineering at Acme Corp, Boston"
+    <input type="hidden" name="company" value="{{ company }}">
+    <input type="hidden" name="q" value="{{ q }}">
+    <input type="text" id="target" name="target"
+           placeholder="e.g. VP of Engineering at Acme Corp, Boston"
            {% if state.running %}disabled{% endif %} autofocus>
     <button class="iconbtn" type="submit" {% if state.running %}disabled{% endif %}>
       {% if state.running %}Running...{% else %}Find contacts{% endif %}
@@ -117,8 +189,35 @@ PAGE = """
 {% endfor %}</div>
   {% endif %}
 
-  <h2>Saved results
-    <span class="muted">({{ rows|length }} rows · {{ contacted_count }} contacted)</span>
+  <div class="filters">
+    <form method="get" action="/">
+      <label for="company">Company</label>
+      <select id="company" name="company" onchange="this.form.submit()">
+        <option value="">All companies ({{ total }})</option>
+        {% for c in companies %}
+          <option value="{{ c }}" {% if c == company %}selected{% endif %}>{{ c }}</option>
+        {% endfor %}
+        <option value="{{ no_company }}" {% if company == no_company %}selected{% endif %}>
+          (no company listed)
+        </option>
+      </select>
+
+      <label for="q" style="margin-left:18px;">Search</label>
+      <input type="text" id="q" name="q" value="{{ q }}"
+             placeholder="any text in any column...">
+      <button class="iconbtn" type="submit">Search</button>
+
+      {% if company or q %}
+        <a href="/" style="margin-left:14px;">clear filters</a>
+      {% endif %}
+    </form>
+  </div>
+
+  <h2>
+    Results
+    <span class="muted">
+      showing {{ rows|length }} of {{ total }} · {{ contacted_count }} contacted
+    </span>
   </h2>
 
   {% if rows %}
@@ -134,6 +233,8 @@ PAGE = """
 
         <td>
           <form class="inline" method="post" action="/toggle/{{ row.row_id }}">
+            <input type="hidden" name="company" value="{{ company }}">
+            <input type="hidden" name="q" value="{{ q }}">
             <button class="iconbtn tick {% if row.contacted == 'yes' %}on{% endif %}"
                     type="submit"
                     title="{% if row.contacted == 'yes' %}Mark as not contacted{% else %}Mark as contacted{% endif %}">
@@ -145,6 +246,8 @@ PAGE = """
         <td>
           <form class="inline" method="post" action="/delete/{{ row.row_id }}"
                 onsubmit="return confirm('Delete {{ row.name|e }}?');">
+            <input type="hidden" name="company" value="{{ company }}">
+            <input type="hidden" name="q" value="{{ q }}">
             <button class="iconbtn del" type="submit" title="Delete this row">&#128465;</button>
           </form>
         </td>
@@ -153,9 +256,12 @@ PAGE = """
           {% set value = row.get(f, '') %}
           <td>
             {% if f == 'linkedin' and value %}
-              <a href="{{ value }}" target="_blank" rel="noopener noreferrer">LinkedIn &#8599;</a>
+              <a class="url" href="{{ value }}" target="_blank" rel="noopener noreferrer">{{ value }}</a>
             {% elif f == 'source_url' and value %}
-              <a href="{{ value }}" target="_blank" rel="noopener noreferrer">source &#8599;</a>
+              <a href="{{ value }}" target="_blank" rel="noopener noreferrer" title="{{ value }}">
+                <span class="srcname">{{ value | domain }}</span> &#8599;
+              </a>
+              <div class="url muted">{{ value }}</div>
             {% elif f == 'email' and value %}
               <a href="mailto:{{ value }}">{{ value }}</a>
             {% else %}
@@ -169,8 +275,13 @@ PAGE = """
     </table>
 
     <form method="post" action="/clear" style="margin-top:16px;">
-      <button class="iconbtn" type="submit" {% if state.running %}disabled{% endif %}>Clear all results</button>
+      <button class="iconbtn" type="submit" {% if state.running %}disabled{% endif %}>
+        Clear all results
+      </button>
     </form>
+
+  {% elif total %}
+    <p class="muted">No rows match this filter. <a href="/">Clear filters</a> to see all {{ total }}.</p>
   {% else %}
     <p class="muted">Nothing saved yet. Enter a target above.</p>
   {% endif %}
