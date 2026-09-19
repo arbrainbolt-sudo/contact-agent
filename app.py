@@ -57,6 +57,10 @@ def back(source):
     return redirect(url_for("home", **params))
 
 
+def logo_exists():
+    return os.path.exists(os.path.join(app.static_folder, "logo.png"))
+
+
 # ---------------------------------------------------------------- the agent
 
 def log(message):
@@ -93,6 +97,7 @@ def home():
         no_company=NO_COMPANY,
         contacted_count=sum(1 for r in visible if r["contacted"] == "yes"),
         fields=contact_agent.DISPLAY_FIELDS,
+        has_logo=logo_exists(),
         state=state,
     )
 
@@ -133,11 +138,13 @@ PAGE = """
 <!doctype html>
 <html>
 <head>
-  <title>Contact Finder</title>
+  <title>Hire2o Contact Finder</title>
   {% if state.running %}<meta http-equiv="refresh" content="3">{% endif %}
   <style>
     body { font-family: system-ui, sans-serif; margin: 40px auto; max-width: 1500px; color:#222; }
-    h1 { font-size: 22px; }
+    .topbar { display:flex; align-items:center; gap:14px; margin-bottom:18px; }
+    .topbar img { height:42px; width:auto; }
+    .wordmark { font-size:24px; font-weight:700; letter-spacing:-0.5px; color:#1a3a6b; }
     input[type=text] { padding: 9px; font-size: 15px; }
     #target { width: 420px; }
     #q { width: 300px; }
@@ -162,12 +169,18 @@ PAGE = """
     form.inline { display:inline; margin:0; }
     .url { word-break: break-all; font-size:12.5px; max-width:300px; display:inline-block; }
     .srcname { font-weight:600; }
-    mark { background:#ffe98a; }
   </style>
 </head>
 <body>
 
-  <h1>Contact Finder</h1>
+  <div class="topbar">
+    {% if has_logo %}
+      <img src="{{ url_for('static', filename='logo.png') }}" alt="Hire2o">
+    {% else %}
+      <span class="wordmark">Hire2o</span>
+    {% endif %}
+    <span class="wordmark" style="font-weight:400; color:#555;">Contact Finder</span>
+  </div>
 
   <form method="post" action="/run">
     <input type="hidden" name="company" value="{{ company }}">
