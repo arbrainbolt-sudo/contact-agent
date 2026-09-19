@@ -20,19 +20,59 @@ MODEL = "openrouter/free"
 
 CSV_FILE = "results.csv"
 
-# row_id is internal plumbing and is never shown in the table.
-FIELDS = ["row_id", "target", "name", "role", "company", "email", "phone",
-          "linkedin", "contacted", "confidence", "notes", "source_url", "found_at"]
+FIELDS = ["row_id", "target", "country", "name", "role", "company", "email",
+          "phone", "linkedin", "contacted", "confidence", "notes",
+          "source_url", "found_at"]
 
-DISPLAY_FIELDS = ["target", "name", "role", "company", "email", "phone",
-                  "linkedin", "confidence", "notes", "source_url", "found_at"]
+DISPLAY_FIELDS = ["target", "country", "name", "role", "company", "email",
+                  "phone", "linkedin", "confidence", "notes",
+                  "source_url", "found_at"]
 
 MAX_PAGES = 12
 PAUSE_SECONDS = 2
 
-# The agent writes from a background thread while the browser reads.
-# This lock stops them from touching the file at the same moment.
 _lock = threading.Lock()
+
+
+# ---------------------------------------------------------------- countries
+# Each entry is  code -> (display name, DuckDuckGo region code)
+# The region code tells the search engine which country's results to prefer.
+
+COUNTRIES = {
+    "":   ("Worldwide (no country filter)", "wt-wt"),
+    "US": ("United States",   "us-en"),
+    "CA": ("Canada",          "ca-en"),
+    "GB": ("United Kingdom",  "uk-en"),
+    "IE": ("Ireland",         "ie-en"),
+    "DE": ("Germany",         "de-de"),
+    "FR": ("France",          "fr-fr"),
+    "NL": ("Netherlands",     "nl-nl"),
+    "ES": ("Spain",           "es-es"),
+    "IT": ("Italy",           "it-it"),
+    "SE": ("Sweden",          "se-sv"),
+    "CH": ("Switzerland",     "ch-de"),
+    "PL": ("Poland",          "pl-pl"),
+    "IN": ("India",           "in-en"),
+    "SG": ("Singapore",       "sg-en"),
+    "AE": ("United Arab Emirates", "ae-en"),
+    "AU": ("Australia",       "au-en"),
+    "NZ": ("New Zealand",     "nz-en"),
+    "JP": ("Japan",           "jp-jp"),
+    "KR": ("South Korea",     "kr-kr"),
+    "PH": ("Philippines",     "ph-en"),
+    "MY": ("Malaysia",        "my-en"),
+    "BR": ("Brazil",          "br-pt"),
+    "MX": ("Mexico",          "mx-es"),
+    "ZA": ("South Africa",    "za-en"),
+}
+
+
+def country_name(code):
+    return COUNTRIES.get(code, COUNTRIES[""])[0]
+
+
+def country_region(code):
+    return COUNTRIES.get(code, COUNTRIES[""])[1]
 
 
 # ---------------------------------------------------------------- links
@@ -65,7 +105,7 @@ def _save(rows):
 
 
 def _migrate(rows):
-    """Give older rows a row_id, a contacted value, and a clean LinkedIn URL."""
+    """Bring older rows up to the current column set."""
     changed = False
     for r in rows:
         if not r.get("row_id"):
@@ -73,6 +113,9 @@ def _migrate(rows):
             changed = True
         if r.get("contacted") not in ("yes", "no"):
             r["contacted"] = "no"
+            changed = True
+        if r.get("country") is None:
+            r["country"] = ""
             changed = True
         fixed = normalize_linkedin(r.get("linkedin"))
         if fixed != (r.get("linkedin") or ""):
@@ -98,7 +141,6 @@ def append_rows(new_rows):
 
 
 def delete_row(row_id):
-    """Remove one row. Returns True if something was actually removed."""
     with _lock:
         rows = _load()
         _migrate(rows)
@@ -110,7 +152,6 @@ def delete_row(row_id):
 
 
 def toggle_contacted(row_id):
-    """Flip the contacted flag between yes and no."""
     with _lock:
         rows = _load()
         _migrate(rows)
@@ -198,13 +239,27 @@ def fetch_page(url, max_chars=7000):
         return ""
 
 
+def ddg_search(query, region, max_results=5, log=print):
+    """Search, preferring results from the chosen country."""
+    try:
+        return list(DDGS().text(query, region=region, max_results=max_results))
+    except TypeError:
+        # older/newer ddgs without a region argument
+        return list(DDGS().text(query, max_results=max_results))
+    except Exception as e:
+        log(f"   search failed: {e}")
+        return []
+
+
 # ---------------------------------------------------------------- prompts
 
-def plan_queries(target):
+def plan_queries(target, place):
+    where = f" located in {place}" if place else ""
     prompt = f"""I am looking for the contact details of a PERSON (or people) matching this description:
-"{target}"
+"{target}"{where}
 
 Write 4 web search queries that would surface their name, work email, phone number, or LinkedIn profile.
+{"Every query must restrict results to " + place + ". Use the country name, or well-known cities in it, inside the query." if place else ""}
 Make the queries different from each other. Useful angles include:
 - a site:linkedin.com/in query
 - the company's team / leadership / staff directory page
@@ -212,15 +267,29 @@ Make the queries different from each other. Useful angles include:
 - an email pattern query using the company domain
 
 Reply with ONLY a JSON array of 4 strings. No markdown, no explanation."""
+
+    suffix = f" {place}" if place else ""
     return parse_json(ask_llm(prompt), fallback=[
-        f'site:linkedin.com/in "{target}"',
-        f'"{target}" email contact',
-        f'"{target}" team OR leadership OR staff directory',
-        f'"{target}" phone',
+        f'site:linkedin.com/in "{target}"{suffix}',
+        f'"{target}"{suffix} email contact',
+        f'"{target}"{suffix} team OR leadership OR staff directory',
+        f'"{target}"{suffix} phone',
     ])
 
 
-def extract_people(target, url, page_text, hints):
+def extract_people(target, url, page_text, hints, place):
+    location_rule = ""
+    if place:
+        location_rule = f"""
+LOCATION FILTER — this matters:
+- Only include people who are based in {place}.
+- Judge this from evidence on the page: an office address, a city, a phone
+  country code, or a stated region.
+- If the page clearly places someone in a DIFFERENT country, leave them out entirely.
+- If the page gives no location at all, you may include them but set confidence to "low"
+  and write "location unconfirmed" in notes.
+"""
+
     prompt = f"""Below is text from the web page {url}.
 
 --- PAGE TEXT ---
@@ -232,23 +301,25 @@ Phone numbers found: {hints['phones'] or 'none'}
 LinkedIn profiles found: {hints['linkedins'] or 'none'}
 
 I am researching: {target}
-
+{location_rule}
 List every PERSON on this page who is relevant to that search and for whom the page gives
 at least one of: an email, a phone number, or a LinkedIn profile.
 
 Reply with ONLY this JSON and nothing else:
 {{"people": [
-  {{"name": "", "role": "", "company": "", "email": "", "phone": "", "linkedin": "", "confidence": "high", "notes": ""}}
+  {{"name": "", "role": "", "company": "", "location": "", "email": "", "phone": "", "linkedin": "", "confidence": "high", "notes": ""}}
 ]}}
 
 Rules:
 - One object per person. Return an empty list if nobody on the page qualifies.
 - Use "" for any detail the page does not give.
+- location: the city and/or country the page gives for this person, or "" if none.
 - NEVER construct or guess an email address. Only copy one that appears in the text above.
 - Do not include generic mailboxes such as info@, sales@, support@, hello@, careers@, privacy@.
 - confidence: "high" if the page clearly ties the detail to that named person,
   "medium" if it is nearby but not explicit, "low" if you are unsure.
 - notes: one short phrase on where the detail came from, e.g. "listed on team page"."""
+
     data = parse_json(ask_llm(prompt), fallback={"people": []})
     if isinstance(data, list):
         return data
@@ -258,8 +329,12 @@ Rules:
 GENERIC_PREFIXES = ("info@", "sales@", "support@", "hello@", "contact@", "admin@",
                     "careers@", "jobs@", "press@", "privacy@", "legal@", "noreply@", "no-reply@")
 
+# Countries the model might name that are NOT the one you picked.
+OTHER_COUNTRY_WORDS = {name.lower() for _, (name, _) in COUNTRIES.items()} - {"worldwide (no country filter)"}
 
-def validate(person, page_text):
+
+def validate(person, page_text, place):
+    """Throw away anything the model made up or mislocated. Returns cleaned person, or None."""
     lower_page = page_text.lower()
 
     email = (person.get("email") or "").strip()
@@ -270,6 +345,20 @@ def validate(person, page_text):
 
     person["linkedin"] = normalize_linkedin(person.get("linkedin"))
 
+    # fold the detected location into notes rather than adding another column
+    loc = (person.pop("location", "") or "").strip()
+    if loc:
+        person["notes"] = (f"{loc} · " + (person.get("notes") or "")).strip(" ·")
+
+    # second safety net: the model named a different country outright
+    if place and loc:
+        loc_l = loc.lower()
+        if place.lower() not in loc_l:
+            named_others = [c for c in OTHER_COUNTRY_WORDS
+                            if c != place.lower() and c in loc_l]
+            if named_others:
+                return None
+
     if not (person.get("name") or "").strip():
         return None
     if not (person.get("email") or person.get("phone") or person.get("linkedin")):
@@ -279,9 +368,14 @@ def validate(person, page_text):
 
 # ---------------------------------------------------------------- the run
 
-def run_agent(target, log=print):
+def run_agent(target, country_code="", log=print):
+    place = country_name(country_code) if country_code else ""
+    region = country_region(country_code)
+
     log(f"Planning searches for: {target}")
-    queries = plan_queries(target)
+    log(f"Country filter: {place or 'none (worldwide)'}  [region {region}]")
+
+    queries = plan_queries(target, place)
     for q in queries:
         log(f"   plan: {q}")
 
@@ -291,16 +385,13 @@ def run_agent(target, log=print):
 
     findings = []
     pages_read = 0
+    dropped_location = 0
 
     for q in queries:
         if pages_read >= MAX_PAGES:
             break
         log(f"Searching: {q}")
-        try:
-            hits = list(DDGS().text(q, max_results=5))
-        except Exception as e:
-            log(f"   search failed: {e}")
-            continue
+        hits = ddg_search(q, region, max_results=5, log=log)
 
         for hit in hits:
             if pages_read >= MAX_PAGES:
@@ -324,12 +415,15 @@ def run_agent(target, log=print):
             hints = find_patterns(text)
             pages_read += 1
 
-            for person in extract_people(target, url, text, hints):
+            for person in extract_people(target, url, text, hints, place):
                 if not isinstance(person, dict):
                     continue
-                person = validate(person, text)
-                if not person:
+                cleaned = validate(person, text, place)
+                if not cleaned:
+                    if person.get("name"):
+                        dropped_location += 1
                     continue
+                person = cleaned
 
                 key = (person["name"].strip().lower(), (person.get("email") or "").strip().lower())
                 if key in seen_people:
@@ -339,6 +433,7 @@ def run_agent(target, log=print):
                 person["row_id"] = uuid.uuid4().hex[:12]
                 person["contacted"] = "no"
                 person["target"] = target
+                person["country"] = place
                 person["source_url"] = url
                 person["found_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
                 findings.append(person)
@@ -347,9 +442,10 @@ def run_agent(target, log=print):
             time.sleep(PAUSE_SECONDS)
 
     append_rows(findings)
-    log(f"Finished. Read {pages_read} pages, saved {len(findings)} new people.")
+    extra = f", {dropped_location} rejected" if dropped_location else ""
+    log(f"Finished. Read {pages_read} pages, saved {len(findings)} new people{extra}.")
     return findings
 
 
 if __name__ == "__main__":
-    run_agent(input("Who are you looking for? "))
+    run_agent(input("Who are you looking for? "), input("Country code (e.g. US, blank for all): ").strip().upper())

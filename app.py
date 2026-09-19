@@ -10,7 +10,7 @@ import contact_agent
 
 app = Flask(__name__)
 
-state = {"running": False, "target": "", "log": []}
+state = {"running": False, "target": "", "country": "", "log": []}
 
 NO_COMPANY = "__blank__"     # dropdown value for rows with no company
 
@@ -68,9 +68,9 @@ def log(message):
     state["log"].append(message)
 
 
-def worker(target):
+def worker(target, country_code):
     try:
-        contact_agent.run_agent(target, log=log)
+        contact_agent.run_agent(target, country_code=country_code, log=log)
     except Exception as e:
         log(f"ERROR: {e}")
     finally:
@@ -92,6 +92,7 @@ def home():
         rows=visible,
         total=len(all_rows),
         companies=company_list(all_rows),
+        countries=contact_agent.COUNTRIES,
         company=company,
         q=q,
         no_company=NO_COMPANY,
@@ -105,11 +106,15 @@ def home():
 @app.route("/run", methods=["POST"])
 def run():
     target = request.form.get("target", "").strip()
+    country_code = request.form.get("country_code", "")
+    if country_code not in contact_agent.COUNTRIES:
+        country_code = ""
     if target and not state["running"]:
         state["running"] = True
         state["target"] = target
+        state["country"] = country_code
         state["log"] = []
-        threading.Thread(target=worker, args=(target,), daemon=True).start()
+        threading.Thread(target=worker, args=(target, country_code), daemon=True).start()
     return back(request.form)
 
 
@@ -186,15 +191,28 @@ PAGE = """
     <input type="hidden" name="company" value="{{ company }}">
     <input type="hidden" name="q" value="{{ q }}">
     <input type="text" id="target" name="target"
-           placeholder="e.g. VP of Engineering at Acme Corp, Boston"
+           placeholder="e.g. VP of Engineering at Acme Corp"
            {% if state.running %}disabled{% endif %} autofocus>
+
+    <select name="country_code" id="country_code" {% if state.running %}disabled{% endif %}>
+      {% for code, info in countries.items() %}
+        <option value="{{ code }}" {% if code == state.country %}selected{% endif %}>
+          {{ info[0] }}
+        </option>
+      {% endfor %}
+    </select>
+
     <button class="iconbtn" type="submit" {% if state.running %}disabled{% endif %}>
       {% if state.running %}Running...{% else %}Find contacts{% endif %}
     </button>
   </form>
 
   {% if state.running %}
-    <div class="banner">Working on <b>{{ state.target }}</b> — this page refreshes every 3 seconds.</div>
+    <div class="banner">
+      Working on <b>{{ state.target }}</b>
+      {% if state.country %}in <b>{{ countries[state.country][0] }}</b>{% endif %}
+      — this page refreshes every 3 seconds.
+    </div>
   {% endif %}
 
   {% if state.log %}
