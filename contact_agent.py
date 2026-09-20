@@ -185,28 +185,71 @@ def update_field(row_id, field, value):
 
 # ---------------------------------------------------------------- the LLM
 
-def ask_llm(prompt):
-    r = requests.post(
-        "https://openrouter.ai/api/v1/chat/completions",
-        headers={"Authorization": f"Bearer {API_KEY}"},
-        json={
-            "model": MODEL,
-            "messages": [
-                {"role": "system",
-                 "content": "You extract contact details about people from web page text. "
-                            "You only report details that literally appear in the text. You never guess."},
-                {"role": "user", "content": prompt},
-            ],
-        },
-        timeout=120,
-    )
-    r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"]
+def ask_llm(prompt, retries=2):
+    """Ask the LLM. Returns text, or '' if the model gave us nothing usable."""
+    last_problem = ""
+
+    for attempt in range(retries + 1):
+        try:
+            r = requests.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={"Authorization": f"Bearer {API_KEY}"},
+                json={
+                    "model": MODEL,
+                    "messages": [
+                        {"role": "system",
+                         "content": "You extract contact details about people from web page text. "
+                                    "You only report details that literally appear in the text. You never guess."},
+                        {"role": "user", "content": prompt},
+                    ],
+                },
+                timeout=120,
+            )
+            r.raise_for_status()
+            data = r.json()
+        except Exception as e:
+            last_problem = str(e)
+            time.sleep(2)
+            continue
+
+        if not data.get("choices"):
+            last_problem = f"no choices in reply: {str(data)[:200]}"
+            time.sleep(2)
+            continue
+
+        message = data["choices"][0].get("message") or {}
+        content = message.get("content")
+
+        # Some reasoning models leave content null and put the answer here instead.
+        if not content:
+            content = message.get("reasoning")
+
+        # Some models return content as a list of blocks rather than a string.
+        if isinstance(content, list):
+            content = " ".join(b.get("text", "") for b in content if isinstance(b, dict))
+
+        if content and content.strip():
+            return content
+
+        last_problem = "model returned empty content"
+        time.sleep(2)
+
+    print(f"   LLM gave nothing after {retries + 1} tries ({last_problem})")
+    return ""
 
 
 def parse_json(raw, fallback):
+    if not raw or not isinstance(raw, str):
+        return fallback
     text = raw.strip()
     text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    # some models wrap JSON in prose — grab the outermost brackets
+    for opener, closer in (("{", "}"), ("[", "]")):
+        if opener in text and closer in text:
+            start, end = text.find(opener), text.rfind(closer)
+            if start < end:
+                text = text[start:end + 1]
+                break
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -288,12 +331,19 @@ Make the queries different from each other. Useful angles include:
 Reply with ONLY a JSON array of 4 strings. No markdown, no explanation."""
 
     suffix = f" {place}" if place else ""
-    return parse_json(ask_llm(prompt), fallback=[
+    fallback = [
         f'site:linkedin.com/in "{target}"{suffix}',
         f'"{target}"{suffix} email contact',
         f'"{target}"{suffix} team OR leadership OR staff directory',
         f'"{target}"{suffix} phone',
-    ])
+    ]
+
+    out = parse_json(ask_llm(prompt), fallback=fallback)
+    # guard against a model returning something that isn't a list of strings
+    if not isinstance(out, list) or not out:
+        return fallback
+    queries = [q for q in out if isinstance(q, str) and q.strip()]
+    return queries or fallback
 
 
 def extract_people(target, url, page_text, hints, place):
@@ -342,7 +392,10 @@ Rules:
     data = parse_json(ask_llm(prompt), fallback={"people": []})
     if isinstance(data, list):
         return data
-    return data.get("people", []) if isinstance(data, dict) else []
+    if isinstance(data, dict):
+        people = data.get("people", [])
+        return people if isinstance(people, list) else []
+    return []
 
 
 GENERIC_PREFIXES = ("info@", "sales@", "support@", "hello@", "contact@", "admin@",
@@ -351,21 +404,32 @@ GENERIC_PREFIXES = ("info@", "sales@", "support@", "hello@", "contact@", "admin@
 OTHER_COUNTRY_WORDS = {name.lower() for _, (name, _) in COUNTRIES.items()} - {"worldwide (no country filter)"}
 
 
+def _text(person, key):
+    """Read a field as a string, whatever nonsense the model put there."""
+    v = person.get(key)
+    return v.strip() if isinstance(v, str) else ""
+
+
 def validate(person, page_text, place):
     """Throw away anything the model made up or mislocated. Returns cleaned person, or None."""
     lower_page = page_text.lower()
 
-    email = (person.get("email") or "").strip()
+    # force every expected field to be a plain string
+    for key in ("name", "role", "company", "email", "phone", "linkedin",
+                "confidence", "notes", "location"):
+        person[key] = _text(person, key)
+
+    email = person["email"]
     if email:
         if email.lower() not in lower_page or email.lower().startswith(GENERIC_PREFIXES):
             person["email"] = ""
-            person["notes"] = ((person.get("notes") or "") + " [email discarded]").strip()
+            person["notes"] = (person["notes"] + " [email discarded]").strip()
 
-    person["linkedin"] = normalize_linkedin(person.get("linkedin"))
+    person["linkedin"] = normalize_linkedin(person["linkedin"])
 
-    loc = (person.pop("location", "") or "").strip()
+    loc = person.pop("location", "")
     if loc:
-        person["notes"] = (f"{loc} · " + (person.get("notes") or "")).strip(" ·")
+        person["notes"] = (f"{loc} · " + person["notes"]).strip(" ·")
 
     if place and loc:
         loc_l = loc.lower()
@@ -375,9 +439,9 @@ def validate(person, page_text, place):
             if named_others:
                 return None
 
-    if not (person.get("name") or "").strip():
+    if not person["name"]:
         return None
-    if not (person.get("email") or person.get("phone") or person.get("linkedin")):
+    if not (person["email"] or person["phone"] or person["linkedin"]):
         return None
     return person
 
@@ -441,7 +505,7 @@ def run_agent(target, country_code="", log=print):
                     continue
                 person = cleaned
 
-                key = (person["name"].strip().lower(), (person.get("email") or "").strip().lower())
+                key = (person["name"].lower(), person["email"].lower())
                 if key in seen_people:
                     continue
                 seen_people.add(key)
@@ -454,7 +518,7 @@ def run_agent(target, country_code="", log=print):
                 person["source_url"] = url
                 person["found_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
                 findings.append(person)
-                log(f"      {person['name']} — {person.get('email') or person.get('phone') or person.get('linkedin')}")
+                log(f"      {person['name']} — {person['email'] or person['phone'] or person['linkedin']}")
 
             time.sleep(PAUSE_SECONDS)
 
