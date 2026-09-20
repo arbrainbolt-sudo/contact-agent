@@ -79,10 +79,11 @@ def worker(target, country_code):
     country = contact_agent.country_name(country_code) if country_code else ""
     try:
         findings = contact_agent.run_agent(target, country_code=country_code, log=log)
-        notify.run_finished(target, country, findings)
+        log("Sending Telegram notification...")
+        notify.run_finished(target, country, findings, log=log)
     except Exception as e:
         log(f"ERROR: {e}")
-        notify.run_finished(target, country, [], error=str(e))
+        notify.run_finished(target, country, [], error=str(e), log=log)
     finally:
         state["running"] = False
 
@@ -92,7 +93,8 @@ def news_worker(push=True):
         items = news.run_news(log=news_log)
         news_state["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M")
         if push:
-            notify.news_digest(items)
+            news_log("Sending Telegram digest...")
+            notify.news_digest(items, log=news_log)
     except Exception as e:
         news_log(f"ERROR: {e}")
     finally:
@@ -181,6 +183,28 @@ def news_save(news_id):
 @app.route("/news/unsave/<news_id>", methods=["POST"])
 def news_unsave(news_id):
     news.unsave_item(news_id)
+    return redirect(url_for("news_page"))
+
+
+@app.route("/news/push/<news_id>", methods=["POST"])
+def news_push(news_id):
+    item = news.find_item(news_id)
+    if item:
+        notify.news_item(item, log=news_log)
+    return redirect(url_for("news_page"))
+
+
+@app.route("/news/push-saved", methods=["POST"])
+def news_push_saved():
+    items = news.saved()
+    if items:
+        notify.news_digest(items, log=news_log)
+    return redirect(url_for("news_page"))
+
+
+@app.route("/news/test-notify", methods=["POST"])
+def news_test_notify():
+    notify.send("Test from Hire2o AI News", log=news_log)
     return redirect(url_for("news_page"))
 
 
@@ -482,6 +506,9 @@ NEWS_PAGE = """
     <button class="iconbtn" type="submit" {% if state.running %}disabled{% endif %}>
       {% if state.running %}Fetching...{% else %}Refresh news{% endif %}
     </button>
+    {% if notify_status != 'off' %}
+      <button class="iconbtn small" type="submit" formaction="/news/test-notify">send test</button>
+    {% endif %}
     <span class="muted" style="margin-left:12px; font-size:13px;">
       Runs automatically at {{ news_time }} daily · {{ items|length }} stories
       {% if state.last_run %}· last run {{ state.last_run }}{% endif %}
@@ -520,6 +547,13 @@ NEWS_PAGE = """
                   <button class="iconbtn small" type="submit">&#9734; save for later</button>
                 </form>
               {% endif %}
+              {% if notify_status != 'off' %}
+                <form class="inline" method="post" action="/news/push/{{ item.news_id }}">
+                  <button class="iconbtn small" type="submit" title="Send this story to your phone">
+                    &#128241; send to phone
+                  </button>
+                </form>
+              {% endif %}
             </div>
           </div>
         {% endfor %}
@@ -530,6 +564,11 @@ NEWS_PAGE = """
 
     <div class="savedcol">
       <h2>Saved for later <span class="muted">({{ saved_items|length }})</span></h2>
+      {% if saved_items and notify_status != 'off' %}
+        <form method="post" action="/news/push-saved" style="margin-bottom:10px;">
+          <button class="iconbtn small" type="submit">&#128241; send all saved to phone</button>
+        </form>
+      {% endif %}
       <div class="savedscroll">
         {% if saved_items %}
           {% for item in saved_items %}
@@ -541,6 +580,11 @@ NEWS_PAGE = """
               <form class="inline" method="post" action="/news/unsave/{{ item.news_id }}">
                 <button class="iconbtn small" type="submit">remove</button>
               </form>
+              {% if notify_status != 'off' %}
+                <form class="inline" method="post" action="/news/push/{{ item.news_id }}">
+                  <button class="iconbtn small" type="submit">&#128241;</button>
+                </form>
+              {% endif %}
             </div>
           {% endfor %}
         {% else %}
