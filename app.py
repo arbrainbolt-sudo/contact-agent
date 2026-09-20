@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from flask import Flask, request, redirect, url_for, render_template_string
 
 import contact_agent
+import notify
 
 app = Flask(__name__)
 
@@ -69,10 +70,13 @@ def log(message):
 
 
 def worker(target, country_code):
+    country = contact_agent.country_name(country_code) if country_code else ""
     try:
-        contact_agent.run_agent(target, country_code=country_code, log=log)
+        findings = contact_agent.run_agent(target, country_code=country_code, log=log)
+        notify.run_finished(target, country, findings)
     except Exception as e:
         log(f"ERROR: {e}")
+        notify.run_finished(target, country, [], error=str(e))
     finally:
         state["running"] = False
 
@@ -98,7 +102,9 @@ def home():
         no_company=NO_COMPANY,
         contacted_count=sum(1 for r in visible if r["contacted"] == "yes"),
         fields=contact_agent.DISPLAY_FIELDS,
+        editable=contact_agent.EDITABLE_FIELDS,
         has_logo=logo_exists(),
+        notify_status=notify.status_line(),
         state=state,
     )
 
@@ -115,6 +121,20 @@ def run():
         state["country"] = country_code
         state["log"] = []
         threading.Thread(target=worker, args=(target, country_code), daemon=True).start()
+    return back(request.form)
+
+
+@app.route("/edit/<row_id>", methods=["POST"])
+def edit(row_id):
+    field = request.form.get("field", "")
+    value = request.form.get("value", "")
+    contact_agent.update_field(row_id, field, value)
+    return back(request.form)
+
+
+@app.route("/test-notify", methods=["POST"])
+def test_notify():
+    notify.send("Test message from Hire2o Contact Finder", log=log)
     return back(request.form)
 
 
@@ -146,10 +166,11 @@ PAGE = """
   <title>Hire2o Contact Finder</title>
   {% if state.running %}<meta http-equiv="refresh" content="3">{% endif %}
   <style>
-    body { font-family: system-ui, sans-serif; margin: 40px auto; max-width: 1500px; color:#222; }
-    .topbar { display:flex; align-items:center; gap:14px; margin-bottom:18px; }
+    body { font-family: system-ui, sans-serif; margin: 40px auto; max-width: 1600px; color:#222; }
+    .topbar { display:flex; align-items:center; gap:14px; margin-bottom:6px; }
     .topbar img { height:42px; width:auto; }
     .wordmark { font-size:24px; font-weight:700; letter-spacing:-0.5px; color:#1a3a6b; }
+    .notifybar { font-size:12.5px; color:#777; margin:0 0 18px 2px; }
     input[type=text] { padding: 9px; font-size: 15px; }
     #target { width: 420px; }
     #q { width: 300px; }
@@ -168,12 +189,22 @@ PAGE = """
     .iconbtn { border:1px solid #ccc; background:#fff; border-radius:5px; cursor:pointer;
                font-size:15px; line-height:1; padding:6px 10px; }
     .iconbtn:hover { background:#f0f0f0; }
+    .small { font-size:12px; padding:4px 8px; }
     .tick.on  { background:#2e9c4a; border-color:#2e9c4a; color:#fff; }
     .del:hover { background:#fdeaea; border-color:#d98080; }
     td a { color:#1155cc; }
     form.inline { display:inline; margin:0; }
     .url { word-break: break-all; font-size:12.5px; max-width:300px; display:inline-block; }
     .srcname { font-weight:600; }
+    .cellform { margin:0; display:flex; gap:4px; align-items:flex-start; }
+    .cellin { border:1px solid transparent; background:transparent; font:inherit;
+              color:inherit; padding:3px 5px; border-radius:4px; width:100%; }
+    .cellin:hover { border-color:#ddd; background:#fff; }
+    .cellin:focus { border-color:#7aa7e6; background:#fff; outline:none;
+                    box-shadow:0 0 0 2px #e4edfb; }
+    textarea.cellin { resize:vertical; min-height:32px; font-size:13px; }
+    td.editable { min-width:150px; }
+    td.commentcell { min-width:210px; max-width:260px; }
   </style>
 </head>
 <body>
@@ -186,6 +217,17 @@ PAGE = """
     {% endif %}
     <span class="wordmark" style="font-weight:400; color:#555;">Contact Finder</span>
   </div>
+
+  <p class="notifybar">
+    Notifications: {{ notify_status }}
+    {% if notify_status != 'off' %}
+      <form class="inline" method="post" action="/test-notify">
+        <input type="hidden" name="company" value="{{ company }}">
+        <input type="hidden" name="q" value="{{ q }}">
+        <button class="iconbtn small" type="submit">send test</button>
+      </form>
+    {% endif %}
+  </p>
 
   <form method="post" action="/run">
     <input type="hidden" name="company" value="{{ company }}">
@@ -285,20 +327,50 @@ PAGE = """
 
         {% for f in fields %}
           {% set value = row.get(f, '') %}
-          <td>
-            {% if f == 'linkedin' and value %}
-              <a class="url" href="{{ value }}" target="_blank" rel="noopener noreferrer">{{ value }}</a>
-            {% elif f == 'source_url' and value %}
-              <a href="{{ value }}" target="_blank" rel="noopener noreferrer" title="{{ value }}">
-                <span class="srcname">{{ value | domain }}</span> &#8599;
-              </a>
-              <div class="url muted">{{ value }}</div>
-            {% elif f == 'email' and value %}
-              <a href="mailto:{{ value }}">{{ value }}</a>
-            {% else %}
-              {{ value }}
-            {% endif %}
-          </td>
+
+          {% if f == 'comment' %}
+            <td class="commentcell">
+              <form class="cellform" method="post" action="/edit/{{ row.row_id }}">
+                <input type="hidden" name="field" value="comment">
+                <input type="hidden" name="company" value="{{ company }}">
+                <input type="hidden" name="q" value="{{ q }}">
+                <textarea class="cellin" name="value" rows="2"
+                          placeholder="add a note..."
+                          onblur="if(this.defaultValue!==this.value){this.form.submit();}"
+                          >{{ value }}</textarea>
+              </form>
+            </td>
+
+          {% elif f in editable %}
+            <td class="editable">
+              <form class="cellform" method="post" action="/edit/{{ row.row_id }}">
+                <input type="hidden" name="field" value="{{ f }}">
+                <input type="hidden" name="company" value="{{ company }}">
+                <input type="hidden" name="q" value="{{ q }}">
+                <input class="cellin" type="text" name="value" value="{{ value }}"
+                       placeholder="—"
+                       onblur="if(this.defaultValue!==this.value){this.form.submit();}">
+              </form>
+              {% if f == 'email' and value %}
+                <a href="mailto:{{ value }}" style="font-size:12px;">write &#8599;</a>
+              {% endif %}
+            </td>
+
+          {% else %}
+            <td>
+              {% if f == 'linkedin' and value %}
+                <a class="url" href="{{ value }}" target="_blank" rel="noopener noreferrer">{{ value }}</a>
+              {% elif f == 'source_url' and value %}
+                <a href="{{ value }}" target="_blank" rel="noopener noreferrer" title="{{ value }}">
+                  <span class="srcname">{{ value | domain }}</span> &#8599;
+                </a>
+                <div class="url muted">{{ value }}</div>
+              {% else %}
+                {{ value }}
+              {% endif %}
+            </td>
+          {% endif %}
+
         {% endfor %}
 
       </tr>

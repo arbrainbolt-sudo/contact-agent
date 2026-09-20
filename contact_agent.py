@@ -21,12 +21,15 @@ MODEL = "openrouter/free"
 CSV_FILE = "results.csv"
 
 FIELDS = ["row_id", "target", "country", "name", "role", "company", "email",
-          "phone", "linkedin", "contacted", "confidence", "notes",
+          "phone", "linkedin", "contacted", "comment", "confidence", "notes",
           "source_url", "found_at"]
 
-DISPLAY_FIELDS = ["target", "country", "name", "role", "company", "email",
-                  "phone", "linkedin", "confidence", "notes",
+DISPLAY_FIELDS = ["comment", "target", "country", "name", "role", "company",
+                  "email", "phone", "linkedin", "confidence", "notes",
                   "source_url", "found_at"]
+
+# Columns you are allowed to edit by hand in the browser.
+EDITABLE_FIELDS = {"phone", "comment", "email", "name", "role", "company"}
 
 MAX_PAGES = 12
 PAUSE_SECONDS = 2
@@ -36,7 +39,6 @@ _lock = threading.Lock()
 
 # ---------------------------------------------------------------- countries
 # Each entry is  code -> (display name, DuckDuckGo region code)
-# The region code tells the search engine which country's results to prefer.
 
 COUNTRIES = {
     "":   ("Worldwide (no country filter)", "wt-wt"),
@@ -114,9 +116,10 @@ def _migrate(rows):
         if r.get("contacted") not in ("yes", "no"):
             r["contacted"] = "no"
             changed = True
-        if r.get("country") is None:
-            r["country"] = ""
-            changed = True
+        for col in ("country", "comment"):
+            if r.get(col) is None:
+                r[col] = ""
+                changed = True
         fixed = normalize_linkedin(r.get("linkedin"))
         if fixed != (r.get("linkedin") or ""):
             r["linkedin"] = fixed
@@ -161,6 +164,23 @@ def toggle_contacted(row_id):
                 _save(rows)
                 return r["contacted"]
         return None
+
+
+def update_field(row_id, field, value):
+    """Hand-edit one cell. Returns True if the row was found and changed."""
+    if field not in EDITABLE_FIELDS:
+        return False
+    with _lock:
+        rows = _load()
+        _migrate(rows)
+        for r in rows:
+            if r["row_id"] == row_id:
+                r[field] = (value or "").strip()
+                if field == "linkedin":
+                    r[field] = normalize_linkedin(r[field])
+                _save(rows)
+                return True
+        return False
 
 
 # ---------------------------------------------------------------- the LLM
@@ -244,7 +264,6 @@ def ddg_search(query, region, max_results=5, log=print):
     try:
         return list(DDGS().text(query, region=region, max_results=max_results))
     except TypeError:
-        # older/newer ddgs without a region argument
         return list(DDGS().text(query, max_results=max_results))
     except Exception as e:
         log(f"   search failed: {e}")
@@ -329,7 +348,6 @@ Rules:
 GENERIC_PREFIXES = ("info@", "sales@", "support@", "hello@", "contact@", "admin@",
                     "careers@", "jobs@", "press@", "privacy@", "legal@", "noreply@", "no-reply@")
 
-# Countries the model might name that are NOT the one you picked.
 OTHER_COUNTRY_WORDS = {name.lower() for _, (name, _) in COUNTRIES.items()} - {"worldwide (no country filter)"}
 
 
@@ -345,12 +363,10 @@ def validate(person, page_text, place):
 
     person["linkedin"] = normalize_linkedin(person.get("linkedin"))
 
-    # fold the detected location into notes rather than adding another column
     loc = (person.pop("location", "") or "").strip()
     if loc:
         person["notes"] = (f"{loc} · " + (person.get("notes") or "")).strip(" ·")
 
-    # second safety net: the model named a different country outright
     if place and loc:
         loc_l = loc.lower()
         if place.lower() not in loc_l:
@@ -432,6 +448,7 @@ def run_agent(target, country_code="", log=print):
 
                 person["row_id"] = uuid.uuid4().hex[:12]
                 person["contacted"] = "no"
+                person["comment"] = ""
                 person["target"] = target
                 person["country"] = place
                 person["source_url"] = url
@@ -448,4 +465,5 @@ def run_agent(target, country_code="", log=print):
 
 
 if __name__ == "__main__":
-    run_agent(input("Who are you looking for? "), input("Country code (e.g. US, blank for all): ").strip().upper())
+    run_agent(input("Who are you looking for? "),
+              input("Country code (e.g. US, blank for all): ").strip().upper())
