@@ -439,17 +439,18 @@ STYLE = """
     }
 
     /* ---------------------------------------------------- table */
-    .tablewrap {
+      .tablewrap {
       background: var(--surface); border:1px solid var(--line);
       border-radius: var(--radius); box-shadow: var(--shadow);
-      overflow-x: auto; overflow-y: visible;
+      max-height: calc(100vh - 210px);
+      overflow: auto;
     }
     table { border-collapse: separate; border-spacing:0; width:100%; font-size: 13.5px; }
     thead th {
       background: #f7f9fb; color: var(--ink-soft);
       font-size: 11px; font-weight: 600; letter-spacing:.055em; text-transform: uppercase;
       text-align:left; padding: 11px 12px; white-space: nowrap;
-      border-bottom: 1px solid var(--line); position: sticky; top: 62px; z-index: 5;
+      border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5;
     }
     tbody td {
       padding: 9px 12px; vertical-align: top;
