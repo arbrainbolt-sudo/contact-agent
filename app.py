@@ -259,87 +259,316 @@ def clear():
 # ---------------------------------------------------------------- templates
 
 STYLE = """
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    body { font-family: system-ui, sans-serif; margin: 30px auto; max-width: 1600px; color:#222; }
-    .topbar { display:flex; align-items:center; gap:14px; margin-bottom:6px; }
-    .topbar img { height:42px; width:auto; }
-    .wordmark { font-size:24px; font-weight:700; letter-spacing:-0.5px; color:#1a3a6b; }
-    .notifybar { font-size:12.5px; color:#777; margin:0 0 14px 2px; }
-    .tabs { border-bottom:2px solid #dfe2e6; margin-bottom:20px; }
-    .tabs a { display:inline-block; padding:9px 20px; text-decoration:none; color:#555;
-              font-size:15px; border:2px solid transparent; border-bottom:none; }
-    .tabs a.on { color:#1a3a6b; font-weight:600; background:#fff;
-                 border-color:#dfe2e6; border-radius:6px 6px 0 0; margin-bottom:-2px; }
-    input[type=text] { padding: 9px; font-size: 15px; }
-    #target { width: 420px; }
-    #q { width: 300px; }
-    select { padding: 9px; font-size: 15px; max-width: 320px; }
-    .filters { background:#f6f7f9; border:1px solid #dfe2e6; padding:14px; margin:22px 0 6px; }
-    .filters label { font-size:13px; color:#555; margin-right:6px; }
-    .banner { background:#fff6d9; border:1px solid #e3c96a; padding:12px; margin:14px 0; }
-    .log { background:#111; color:#0f0; font-family: monospace; font-size:13px;
-           padding:12px; height:150px; overflow:auto; white-space:pre-wrap; margin:12px 0; }
-    table { border-collapse: collapse; width: 100%; margin-top: 14px; font-size: 14px; }
-    th, td { border: 1px solid #ddd; padding: 6px 9px; text-align: left; vertical-align: top; }
-    th { background: #f2f2f2; }
-    tr.done { background: #eefbee; color:#667; }
-    tr.done td a { color:#779; }
-    .muted { color:#777; font-weight: normal; }
-    .iconbtn { border:1px solid #ccc; background:#fff; border-radius:5px; cursor:pointer;
-               font-size:15px; line-height:1; padding:6px 10px; }
-    .iconbtn:hover { background:#f0f0f0; }
-    .small { font-size:12px; padding:4px 8px; }
-    .tick.on  { background:#2e9c4a; border-color:#2e9c4a; color:#fff; }
-    .del:hover { background:#fdeaea; border-color:#d98080; }
-    td a { color:#1155cc; }
-    form.inline { display:inline; margin:0; }
-    .url { word-break: break-all; font-size:12.5px; max-width:300px; display:inline-block; }
-    .srcname { font-weight:600; }
-    .cellform { margin:0; display:flex; gap:4px; align-items:flex-start; }
-    .cellin { border:1px solid transparent; background:transparent; font:inherit;
-              color:inherit; padding:3px 5px; border-radius:4px; width:100%; }
-    .cellin:hover { border-color:#ddd; background:#fff; }
-    .cellin:focus { border-color:#7aa7e6; background:#fff; outline:none;
-                    box-shadow:0 0 0 2px #e4edfb; }
-    textarea.cellin { resize:vertical; min-height:32px; font-size:13px; }
-    td.editable { min-width:150px; }
-    td.commentcell { min-width:210px; max-width:260px; }
+    /* ============================================================
+       BRAND PALETTE — change these five lines to re-theme the app
+       ============================================================ */
+    :root {
+      --brand:        #0f2f5c;   /* primary navy — header, headings */
+      --brand-light:  #1c4a8a;   /* hover / lighter navy */
+      --accent:       #00a8a8;   /* teal — buttons, links, highlights */
+      --accent-dark:  #00807f;   /* teal hover */
+      --accent-soft:  #e4f6f6;   /* pale teal — backgrounds, chips */
 
-    .newswrap { display:grid; grid-template-columns: 1fr 380px; gap:26px; align-items:start; }
-    .card { border:1px solid #e2e5e9; border-radius:8px; padding:15px 17px; margin-bottom:14px;
-            background:#fff; }
-    .card h3 { margin:0 0 7px; font-size:16.5px; line-height:1.35; }
-    .card h3 a { color:#12264a; text-decoration:none; }
-    .card h3 a:hover { text-decoration:underline; }
-    .card p { margin:0 0 10px; font-size:14px; line-height:1.55; color:#333; }
-    .meta { font-size:12px; color:#888; margin-bottom:8px; }
-    .cardlink { font-size:12.5px; word-break:break-all; }
-    .savedcol { border:1px solid #dfe2e6; border-radius:8px; background:#f8f9fb;
-                padding:14px; position:sticky; top:20px; }
-    .savedcol h2 { margin:0 0 10px; font-size:16px; }
-    .savedscroll { max-height:70vh; overflow-y:auto; padding-right:6px; }
-    .savedcard { border-bottom:1px solid #e4e7ea; padding:10px 0; }
+      --ink:          #17212e;
+      --ink-soft:     #5b6878;
+      --ink-faint:    #8a95a3;
+      --line:         #e3e8ee;
+      --line-soft:    #eef1f5;
+      --surface:      #ffffff;
+      --canvas:       #f5f7fa;
+
+      --green:        #16a34a;
+      --green-soft:   #eaf7ee;
+      --amber:        #b7791f;
+      --amber-soft:   #fdf6e3;
+      --red:          #dc2626;
+      --red-soft:     #fdeced;
+
+      --radius:       10px;
+      --shadow:       0 1px 2px rgba(16,32,56,.06), 0 2px 8px rgba(16,32,56,.05);
+      --shadow-lift:  0 2px 6px rgba(16,32,56,.09), 0 8px 24px rgba(16,32,56,.07);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+      background: var(--canvas);
+      color: var(--ink);
+      margin: 0;
+      font-size: 14px;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .shell { max-width: 1640px; margin: 0 auto; padding: 0 28px 60px; }
+
+    /* ---------------------------------------------------- header */
+    .masthead {
+      background: var(--brand);
+      background-image: linear-gradient(135deg, var(--brand) 0%, #143a70 100%);
+      color: #fff;
+      position: sticky; top: 0; z-index: 50;
+      box-shadow: 0 1px 0 rgba(255,255,255,.08), 0 2px 14px rgba(9,24,48,.22);
+    }
+    .masthead-inner {
+      max-width: 1640px; margin: 0 auto; padding: 0 28px;
+      display: flex; align-items: center; gap: 26px; height: 62px;
+    }
+    .brandmark { display:flex; align-items:center; gap:11px; text-decoration:none; }
+    .brandmark img { height: 32px; width:auto; display:block; }
+    .brandmark .name { font-size: 19px; font-weight: 700; color:#fff; letter-spacing:-0.3px; }
+    .brandmark .sub {
+      font-size: 12px; font-weight: 500; color: rgba(255,255,255,.62);
+      border-left: 1px solid rgba(255,255,255,.22); padding-left: 11px; margin-left: 2px;
+    }
+
+    .nav { display:flex; gap:4px; margin-left: 10px; }
+    .nav a {
+      color: rgba(255,255,255,.76); text-decoration:none; font-size:14px; font-weight:500;
+      padding: 7px 15px; border-radius: 7px; transition: all .13s;
+    }
+    .nav a:hover { color:#fff; background: rgba(255,255,255,.1); }
+    .nav a.on { color: var(--brand); background: #fff; font-weight:600; }
+
+    .masthead .spacer { flex: 1; }
+    .statuspill {
+      font-size: 12px; color: rgba(255,255,255,.8); display:flex; align-items:center; gap:7px;
+      background: rgba(255,255,255,.1); padding: 5px 12px; border-radius: 99px;
+    }
+    .dot { width:7px; height:7px; border-radius:50%; background: var(--ink-faint); }
+    .dot.live { background:#3ddc97; box-shadow:0 0 0 3px rgba(61,220,151,.22); }
+
+    /* ---------------------------------------------------- panels */
+    .panel {
+      background: var(--surface); border:1px solid var(--line);
+      border-radius: var(--radius); box-shadow: var(--shadow);
+    }
+    .panel-pad { padding: 20px 22px; }
+    .panel + .panel { margin-top: 18px; }
+
+    .searchbar { margin-top: 24px; }
+    .searchrow { display:flex; gap:11px; align-items:center; flex-wrap:wrap; }
+    .fieldlabel {
+      display:block; font-size:11px; font-weight:600; letter-spacing:.05em;
+      text-transform:uppercase; color: var(--ink-faint); margin-bottom:6px;
+    }
+
+    input[type=text], select, textarea {
+      font-family: inherit; font-size: 14px; color: var(--ink);
+      border: 1px solid var(--line); border-radius: 8px;
+      padding: 10px 12px; background: #fff; transition: border-color .13s, box-shadow .13s;
+    }
+    input[type=text]:focus, select:focus, textarea:focus {
+      outline:none; border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    input[type=text]:disabled, select:disabled { background:#f6f8fa; color: var(--ink-faint); }
+    #target { flex: 1 1 400px; min-width: 280px; }
+    #q { width: 280px; }
+    select { min-width: 210px; cursor:pointer; }
+
+    /* ---------------------------------------------------- buttons */
+    .btn {
+      font-family: inherit; font-size: 14px; font-weight: 500; line-height:1;
+      border: 1px solid var(--line); background: #fff; color: var(--ink);
+      border-radius: 8px; padding: 11px 16px; cursor: pointer;
+      transition: all .13s; white-space: nowrap;
+    }
+    .btn:hover { border-color: #c9d2dd; background: #fafbfc; }
+    .btn:active { transform: translateY(1px); }
+    .btn:disabled { opacity:.5; cursor: not-allowed; transform:none; }
+
+    .btn-primary {
+      background: var(--accent); border-color: var(--accent); color:#fff; font-weight:600;
+      box-shadow: 0 1px 3px rgba(0,168,168,.3);
+    }
+    .btn-primary:hover:not(:disabled) { background: var(--accent-dark); border-color: var(--accent-dark); }
+    .btn-sm { font-size: 12.5px; padding: 7px 11px; border-radius:7px; }
+    .btn-icon { padding: 7px 10px; font-size: 14px; }
+    .btn-ghost { border-color: transparent; background: transparent; color: var(--ink-soft); }
+    .btn-ghost:hover { background: var(--line-soft); border-color: transparent; }
+    .btn-danger:hover { background: var(--red-soft); border-color:#f0b4b4; color: var(--red); }
+    .btn-on { background: var(--green); border-color: var(--green); color:#fff; }
+    .btn-on:hover { background:#128a3e; border-color:#128a3e; }
+    .btn-star { color: var(--amber); border-color:#e8d9b0; background: var(--amber-soft); }
+
+    form.inline { display:inline-block; margin:0; }
+
+    /* ---------------------------------------------------- banner + log */
+    .banner {
+      display:flex; align-items:center; gap:11px;
+      background: var(--amber-soft); border:1px solid #ecd9a4;
+      border-left: 4px solid var(--amber);
+      color:#7c5b13; padding: 13px 17px; border-radius: 8px; margin: 16px 0;
+      font-size: 13.5px;
+    }
+    .pulse {
+      width:9px; height:9px; border-radius:50%; background: var(--amber);
+      animation: pulse 1.3s ease-in-out infinite; flex-shrink:0;
+    }
+    @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.3; } }
+
+    .log {
+      background: #0e1a2b; color: #93e6c8;
+      font-family: ui-monospace, 'SF Mono', Menlo, monospace; font-size: 12.5px;
+      line-height:1.65; padding: 15px 17px; border-radius: var(--radius);
+      height: 168px; overflow:auto; white-space: pre-wrap; margin: 16px 0;
+      box-shadow: inset 0 1px 6px rgba(0,0,0,.34);
+    }
+    .log::-webkit-scrollbar { width: 9px; }
+    .log::-webkit-scrollbar-thumb { background: #2b4055; border-radius: 5px; }
+
+    /* ---------------------------------------------------- section head */
+    .sectionhead {
+      display:flex; align-items:baseline; gap:13px; margin: 26px 0 13px;
+    }
+    .sectionhead h2 {
+      font-size: 17px; font-weight: 650; color: var(--brand); margin:0; letter-spacing:-0.2px;
+    }
+    .counts { font-size: 13px; color: var(--ink-faint); }
+    .chip {
+      display:inline-block; background: var(--accent-soft); color: var(--accent-dark);
+      font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 99px;
+    }
+
+    /* ---------------------------------------------------- table */
+    .tablewrap {
+      background: var(--surface); border:1px solid var(--line);
+      border-radius: var(--radius); box-shadow: var(--shadow);
+      overflow-x: auto; overflow-y: visible;
+    }
+    table { border-collapse: separate; border-spacing:0; width:100%; font-size: 13.5px; }
+    thead th {
+      background: #f7f9fb; color: var(--ink-soft);
+      font-size: 11px; font-weight: 600; letter-spacing:.055em; text-transform: uppercase;
+      text-align:left; padding: 11px 12px; white-space: nowrap;
+      border-bottom: 1px solid var(--line); position: sticky; top: 62px; z-index: 5;
+    }
+    tbody td {
+      padding: 9px 12px; vertical-align: top;
+      border-bottom: 1px solid var(--line-soft);
+    }
+    tbody tr:hover { background: #fbfcfd; }
+    tbody tr:last-child td { border-bottom: none; }
+
+    tr.done { background: var(--green-soft); }
+    tr.done:hover { background: #e2f3e8; }
+    tr.done td:first-child { box-shadow: inset 3px 0 0 var(--green); }
+    tr.done td { color: #4c6555; }
+
+    td a { color: var(--accent-dark); text-decoration: none; }
+    td a:hover { text-decoration: underline; }
+    .url { word-break: break-all; font-size: 11.5px; display:inline-block; max-width: 270px; }
+    .srcname { font-weight: 600; color: var(--brand-light); }
+    .muted { color: var(--ink-faint); font-weight: 400; }
+
+    .badge {
+      display:inline-block; font-size: 11px; font-weight: 600;
+      padding: 2px 9px; border-radius: 99px; text-transform: capitalize;
+    }
+    .badge-high   { background: var(--green-soft); color: #15803d; }
+    .badge-medium { background: var(--amber-soft); color: var(--amber); }
+    .badge-low    { background: var(--line-soft);  color: var(--ink-faint); }
+
+    /* ---------------------------------------------------- editable cells */
+    .cellform { margin:0; }
+    .cellin {
+      border: 1px solid transparent; background: transparent; font: inherit;
+      color: inherit; padding: 5px 7px; border-radius: 6px; width: 100%;
+      transition: all .12s;
+    }
+    .cellin:hover { border-color: var(--line); background:#fff; }
+    .cellin:focus {
+      border-color: var(--accent); background:#fff; outline:none;
+      box-shadow: 0 0 0 3px var(--accent-soft);
+    }
+    .cellin::placeholder { color: #c3ccd6; }
+    textarea.cellin { resize: vertical; min-height: 40px; font-size: 12.5px; line-height:1.45; }
+    td.editable { min-width: 155px; }
+    td.commentcell { min-width: 225px; max-width: 270px; }
+
+    /* ---------------------------------------------------- news */
+    .newswrap { display: grid; grid-template-columns: minmax(0,1fr) 390px; gap: 24px; align-items:start; }
+    @media (max-width: 1150px) { .newswrap { grid-template-columns: 1fr; } }
+
+    .card {
+      background: var(--surface); border:1px solid var(--line); border-radius: var(--radius);
+      padding: 20px 22px; margin-bottom: 16px; box-shadow: var(--shadow);
+      transition: box-shadow .16s, transform .16s;
+    }
+    .card:hover { box-shadow: var(--shadow-lift); transform: translateY(-1px); }
+    .card h3 { margin: 0 0 9px; font-size: 17px; line-height:1.38; font-weight: 650; letter-spacing:-0.2px; }
+    .card h3 a { color: var(--brand); text-decoration:none; }
+    .card h3 a:hover { color: var(--accent-dark); }
+    .card p { margin: 0 0 13px; font-size: 14.5px; line-height: 1.62; color: #3a4658; }
+
+    .meta { display:flex; align-items:center; gap:9px; font-size: 12px; color: var(--ink-faint); margin-bottom: 11px; }
+    .sourcetag {
+      background: var(--accent-soft); color: var(--accent-dark);
+      font-weight: 600; padding: 3px 9px; border-radius: 5px; font-size: 11.5px;
+    }
+    .cardlink { font-size: 12px; word-break: break-all; color: var(--ink-faint); text-decoration:none; }
+    .cardlink:hover { color: var(--accent-dark); }
+    .cardactions { display:flex; gap:8px; margin-top: 15px; padding-top: 14px; border-top: 1px solid var(--line-soft); }
+
+    .savedcol {
+      background: var(--surface); border:1px solid var(--line); border-radius: var(--radius);
+      box-shadow: var(--shadow); position: sticky; top: 82px; overflow: hidden;
+    }
+    .savedhead {
+      background: linear-gradient(135deg, var(--brand) 0%, #143a70 100%); color:#fff;
+      padding: 15px 18px;
+    }
+    .savedhead h2 { margin:0 0 3px; font-size: 15px; font-weight: 650; }
+    .savedhead .n { font-size: 12px; color: rgba(255,255,255,.66); }
+    .savedbody { padding: 12px 16px 16px; }
+    .savedscroll { max-height: 62vh; overflow-y: auto; margin: 0 -6px; padding: 0 6px; }
+    .savedscroll::-webkit-scrollbar { width: 7px; }
+    .savedscroll::-webkit-scrollbar-thumb { background: #d2dae3; border-radius: 4px; }
+    .savedscroll::-webkit-scrollbar-thumb:hover { background: #b9c4d0; }
+    .savedcard { padding: 13px 0; border-bottom: 1px solid var(--line-soft); }
     .savedcard:last-child { border-bottom:none; }
-    .savedcard a { font-size:14px; color:#12264a; font-weight:600; text-decoration:none; }
-    .savedcard a:hover { text-decoration:underline; }
-    .savedcard .meta { margin:4px 0 6px; }
+    .savedcard > a {
+      font-size: 13.5px; font-weight: 600; color: var(--brand); text-decoration:none;
+      line-height:1.42; display:block; margin-bottom: 5px;
+    }
+    .savedcard > a:hover { color: var(--accent-dark); }
+
+    .empty { text-align:center; padding: 46px 22px; color: var(--ink-faint); }
+    .empty .big { font-size: 34px; margin-bottom: 10px; opacity:.4; }
+    .empty p { margin: 0; font-size: 14px; }
   </style>
 """
 
 HEADER = """
-  <div class="topbar">
-    {% if has_logo %}
-      <img src="{{ url_for('static', filename='logo.png') }}" alt="Hire2o">
-    {% else %}
-      <span class="wordmark">Hire2o</span>
-    {% endif %}
-    <span class="wordmark" style="font-weight:400; color:#555;">Workbench</span>
-  </div>
-  <p class="notifybar">Notifications: {{ notify_status }}</p>
+  <div class="masthead">
+    <div class="masthead-inner">
+      <a class="brandmark" href="/">
+        {% if has_logo %}
+          <img src="{{ url_for('static', filename='logo.png') }}" alt="Hire2o">
+        {% else %}
+          <span class="name">Hire2o</span>
+        {% endif %}
+        <span class="sub">Workbench</span>
+      </a>
 
-  <div class="tabs">
-    <a href="/" class="{% if tab == 'contacts' %}on{% endif %}">Contacts</a>
-    <a href="/news" class="{% if tab == 'news' %}on{% endif %}">AI News</a>
+      <nav class="nav">
+        <a href="/" class="{% if tab == 'contacts' %}on{% endif %}">Contacts</a>
+        <a href="/news" class="{% if tab == 'news' %}on{% endif %}">AI News</a>
+      </nav>
+
+      <div class="spacer"></div>
+
+      <div class="statuspill">
+        <span class="dot {% if notify_status != 'off' %}live{% endif %}"></span>
+        {{ notify_status }}
+      </div>
+    </div>
   </div>
 """
 
@@ -347,38 +576,50 @@ CONTACTS_PAGE = """
 <!doctype html>
 <html>
 <head>
+  <meta charset="utf-8">
   <title>Hire2o — Contacts</title>
   {% if state.running %}<meta http-equiv="refresh" content="3">{% endif %}
 """ + STYLE + """
 </head>
 <body>
 """ + HEADER + """
+<div class="shell">
 
-  <form method="post" action="/run">
-    <input type="hidden" name="company" value="{{ company }}">
-    <input type="hidden" name="q" value="{{ q }}">
-    <input type="text" id="target" name="target"
-           placeholder="e.g. VP of Engineering at Acme Corp"
-           {% if state.running %}disabled{% endif %} autofocus>
-
-    <select name="country_code" {% if state.running %}disabled{% endif %}>
-      {% for code, info in countries.items() %}
-        <option value="{{ code }}" {% if code == state.country %}selected{% endif %}>{{ info[0] }}</option>
-      {% endfor %}
-    </select>
-
-    <button class="iconbtn" type="submit" {% if state.running %}disabled{% endif %}>
-      {% if state.running %}Running...{% else %}Find contacts{% endif %}
-    </button>
-
-    <button class="iconbtn small" type="submit" formaction="/test-notify">send test</button>
-  </form>
+  <div class="panel panel-pad searchbar">
+    <form method="post" action="/run">
+      <input type="hidden" name="company" value="{{ company }}">
+      <input type="hidden" name="q" value="{{ q }}">
+      <div class="searchrow">
+        <div style="flex:1 1 400px; min-width:280px;">
+          <label class="fieldlabel" for="target">Who are you looking for</label>
+          <input type="text" id="target" name="target" style="width:100%;"
+                 placeholder="e.g. VP of Engineering at Acme Corp"
+                 {% if state.running %}disabled{% endif %} autofocus>
+        </div>
+        <div>
+          <label class="fieldlabel" for="country_code">Country</label>
+          <select id="country_code" name="country_code" {% if state.running %}disabled{% endif %}>
+            {% for code, info in countries.items() %}
+              <option value="{{ code }}" {% if code == state.country %}selected{% endif %}>{{ info[0] }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div style="align-self:flex-end; display:flex; gap:8px;">
+          <button class="btn btn-primary" type="submit" {% if state.running %}disabled{% endif %}>
+            {% if state.running %}Searching…{% else %}Find contacts{% endif %}
+          </button>
+          {% if notify_status != 'off' %}
+            <button class="btn btn-ghost" type="submit" formaction="/test-notify">Test alert</button>
+          {% endif %}
+        </div>
+      </div>
+    </form>
+  </div>
 
   {% if state.running %}
     <div class="banner">
-      Working on <b>{{ state.target }}</b>
-      {% if state.country %}in <b>{{ countries[state.country][0] }}</b>{% endif %}
-      — refreshing every 3 seconds.
+      <span class="pulse"></span>
+      <span>Searching for <b>{{ state.target }}</b>{% if state.country %} in <b>{{ countries[state.country][0] }}</b>{% endif %} — this page refreshes every 3 seconds.</span>
     </div>
   {% endif %}
 
@@ -387,106 +628,130 @@ CONTACTS_PAGE = """
 {% endfor %}</div>
   {% endif %}
 
-  <div class="filters">
+  <div class="panel panel-pad" style="margin-top:18px;">
     <form method="get" action="/">
-      <label for="company">Company</label>
-      <select id="company" name="company" onchange="this.form.submit()">
-        <option value="">All companies ({{ total }})</option>
-        {% for c in companies %}
-          <option value="{{ c }}" {% if c == company %}selected{% endif %}>{{ c }}</option>
-        {% endfor %}
-        <option value="{{ no_company }}" {% if company == no_company %}selected{% endif %}>
-          (no company listed)
-        </option>
-      </select>
-
-      <label for="q" style="margin-left:18px;">Search</label>
-      <input type="text" id="q" name="q" value="{{ q }}" placeholder="any text in any column...">
-      <button class="iconbtn" type="submit">Search</button>
-      {% if company or q %}<a href="/" style="margin-left:14px;">clear filters</a>{% endif %}
+      <div class="searchrow">
+        <div>
+          <label class="fieldlabel" for="company">Filter by company</label>
+          <select id="company" name="company" onchange="this.form.submit()">
+            <option value="">All companies ({{ total }})</option>
+            {% for c in companies %}
+              <option value="{{ c }}" {% if c == company %}selected{% endif %}>{{ c }}</option>
+            {% endfor %}
+            <option value="{{ no_company }}" {% if company == no_company %}selected{% endif %}>(no company listed)</option>
+          </select>
+        </div>
+        <div>
+          <label class="fieldlabel" for="q">Search all columns</label>
+          <input type="text" id="q" name="q" value="{{ q }}" placeholder="name, note, email, city…">
+        </div>
+        <div style="align-self:flex-end; display:flex; gap:8px; align-items:center;">
+          <button class="btn" type="submit">Search</button>
+          {% if company or q %}<a href="/" style="font-size:13px; color:var(--ink-soft);">Clear filters</a>{% endif %}
+        </div>
+      </div>
     </form>
   </div>
 
-  <h2>Results
-    <span class="muted">showing {{ rows|length }} of {{ total }} · {{ contacted_count }} contacted</span>
-  </h2>
+  <div class="sectionhead">
+    <h2>Contacts</h2>
+    <span class="counts">showing {{ rows|length }} of {{ total }}</span>
+    {% if contacted_count %}<span class="chip">{{ contacted_count }} contacted</span>{% endif %}
+  </div>
 
   {% if rows %}
-    <table>
-      <tr>
-        <th>Done</th><th>Del</th>
-        {% for f in fields %}<th>{{ f }}</th>{% endfor %}
-      </tr>
-      {% for row in rows %}
-      <tr class="{% if row.contacted == 'yes' %}done{% endif %}">
-        <td>
-          <form class="inline" method="post" action="/toggle/{{ row.row_id }}">
-            <input type="hidden" name="company" value="{{ company }}">
-            <input type="hidden" name="q" value="{{ q }}">
-            <button class="iconbtn tick {% if row.contacted == 'yes' %}on{% endif %}" type="submit">&#10003;</button>
-          </form>
-        </td>
-        <td>
-          <form class="inline" method="post" action="/delete/{{ row.row_id }}"
-                onsubmit="return confirm('Delete {{ row.name|e }}?');">
-            <input type="hidden" name="company" value="{{ company }}">
-            <input type="hidden" name="q" value="{{ q }}">
-            <button class="iconbtn del" type="submit">&#128465;</button>
-          </form>
-        </td>
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Done</th><th></th>
+            {% for f in fields %}<th>{{ f.replace('_', ' ') }}</th>{% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+        {% for row in rows %}
+        <tr class="{% if row.contacted == 'yes' %}done{% endif %}">
+          <td>
+            <form class="inline" method="post" action="/toggle/{{ row.row_id }}">
+              <input type="hidden" name="company" value="{{ company }}">
+              <input type="hidden" name="q" value="{{ q }}">
+              <button class="btn btn-icon {% if row.contacted == 'yes' %}btn-on{% endif %}" type="submit"
+                      title="{% if row.contacted == 'yes' %}Mark as not contacted{% else %}Mark as contacted{% endif %}">&#10003;</button>
+            </form>
+          </td>
+          <td>
+            <form class="inline" method="post" action="/delete/{{ row.row_id }}"
+                  onsubmit="return confirm('Delete {{ row.name|e }}?');">
+              <input type="hidden" name="company" value="{{ company }}">
+              <input type="hidden" name="q" value="{{ q }}">
+              <button class="btn btn-icon btn-danger" type="submit" title="Delete row">&#128465;</button>
+            </form>
+          </td>
 
-        {% for f in fields %}
-          {% set value = row.get(f, '') %}
-          {% if f == 'comment' %}
-            <td class="commentcell">
-              <form class="cellform" method="post" action="/edit/{{ row.row_id }}">
-                <input type="hidden" name="field" value="comment">
-                <input type="hidden" name="company" value="{{ company }}">
-                <input type="hidden" name="q" value="{{ q }}">
-                <textarea class="cellin" name="value" rows="2" placeholder="add a note..."
-                          onblur="if(this.defaultValue!==this.value){this.form.submit();}">{{ value }}</textarea>
-              </form>
-            </td>
-          {% elif f in editable %}
-            <td class="editable">
-              <form class="cellform" method="post" action="/edit/{{ row.row_id }}">
-                <input type="hidden" name="field" value="{{ f }}">
-                <input type="hidden" name="company" value="{{ company }}">
-                <input type="hidden" name="q" value="{{ q }}">
-                <input class="cellin" type="text" name="value" value="{{ value }}" placeholder="—"
-                       onblur="if(this.defaultValue!==this.value){this.form.submit();}">
-              </form>
-              {% if f == 'email' and value %}
-                <a href="mailto:{{ value }}" style="font-size:12px;">write &#8599;</a>
-              {% endif %}
-            </td>
-          {% else %}
-            <td>
-              {% if f == 'linkedin' and value %}
-                <a class="url" href="{{ value }}" target="_blank" rel="noopener noreferrer">{{ value }}</a>
-              {% elif f == 'source_url' and value %}
-                <a href="{{ value }}" target="_blank" rel="noopener noreferrer" title="{{ value }}">
-                  <span class="srcname">{{ value | domain }}</span> &#8599;</a>
-                <div class="url muted">{{ value }}</div>
-              {% else %}
-                {{ value }}
-              {% endif %}
-            </td>
-          {% endif %}
+          {% for f in fields %}
+            {% set value = row.get(f, '') %}
+            {% if f == 'comment' %}
+              <td class="commentcell">
+                <form class="cellform" method="post" action="/edit/{{ row.row_id }}">
+                  <input type="hidden" name="field" value="comment">
+                  <input type="hidden" name="company" value="{{ company }}">
+                  <input type="hidden" name="q" value="{{ q }}">
+                  <textarea class="cellin" name="value" rows="2" placeholder="Add a note…"
+                            onblur="if(this.defaultValue!==this.value){this.form.submit();}">{{ value }}</textarea>
+                </form>
+              </td>
+            {% elif f in editable %}
+              <td class="editable">
+                <form class="cellform" method="post" action="/edit/{{ row.row_id }}">
+                  <input type="hidden" name="field" value="{{ f }}">
+                  <input type="hidden" name="company" value="{{ company }}">
+                  <input type="hidden" name="q" value="{{ q }}">
+                  <input class="cellin" type="text" name="value" value="{{ value }}" placeholder="—"
+                         onblur="if(this.defaultValue!==this.value){this.form.submit();}">
+                </form>
+                {% if f == 'email' and value %}
+                  <a href="mailto:{{ value }}" style="font-size:11.5px; padding-left:7px;">Compose &#8599;</a>
+                {% endif %}
+              </td>
+            {% elif f == 'confidence' %}
+              <td>{% if value %}<span class="badge badge-{{ value|lower }}">{{ value }}</span>{% endif %}</td>
+            {% else %}
+              <td>
+                {% if f == 'linkedin' and value %}
+                  <a class="url" href="{{ value }}" target="_blank" rel="noopener noreferrer">{{ value }}</a>
+                {% elif f == 'source_url' and value %}
+                  <a href="{{ value }}" target="_blank" rel="noopener noreferrer" title="{{ value }}">
+                    <span class="srcname">{{ value | domain }}</span> &#8599;</a>
+                  <div class="url muted">{{ value }}</div>
+                {% else %}
+                  {{ value }}
+                {% endif %}
+              </td>
+            {% endif %}
+          {% endfor %}
+        </tr>
         {% endfor %}
-      </tr>
-      {% endfor %}
-    </table>
+        </tbody>
+      </table>
+    </div>
 
-    <form method="post" action="/clear" style="margin-top:16px;">
-      <button class="iconbtn" type="submit" {% if state.running %}disabled{% endif %}>Clear all results</button>
+    <form method="post" action="/clear" style="margin-top:18px;">
+      <button class="btn btn-danger" type="submit" {% if state.running %}disabled{% endif %}>Clear all contacts</button>
     </form>
+
   {% elif total %}
-    <p class="muted">No rows match this filter. <a href="/">Clear filters</a> to see all {{ total }}.</p>
+    <div class="panel empty">
+      <div class="big">&#128269;</div>
+      <p>No contacts match this filter. <a href="/" style="color:var(--accent-dark);">Clear filters</a> to see all {{ total }}.</p>
+    </div>
   {% else %}
-    <p class="muted">Nothing saved yet. Enter a target above.</p>
+    <div class="panel empty">
+      <div class="big">&#128100;</div>
+      <p>No contacts yet. Describe who you're looking for above and press <b>Find contacts</b>.</p>
+    </div>
   {% endif %}
 
+</div>
 </body>
 </html>
 """
@@ -495,34 +760,50 @@ NEWS_PAGE = """
 <!doctype html>
 <html>
 <head>
+  <meta charset="utf-8">
   <title>Hire2o — AI News</title>
   {% if state.running %}<meta http-equiv="refresh" content="4">{% endif %}
 """ + STYLE + """
 </head>
 <body>
 """ + HEADER + """
+<div class="shell">
 
-  <form method="post" action="/news/run" style="margin-bottom:6px;">
-    <button class="iconbtn" type="submit" {% if state.running %}disabled{% endif %}>
-      {% if state.running %}Fetching...{% else %}Refresh news{% endif %}
-    </button>
-    {% if notify_status != 'off' %}
-      <button class="iconbtn small" type="submit" formaction="/news/test-notify">send test</button>
-    {% endif %}
-    <span class="muted" style="margin-left:12px; font-size:13px;">
-      Runs automatically at {{ news_time }} daily · {{ items|length }} stories
-      {% if state.last_run %}· last run {{ state.last_run }}{% endif %}
-    </span>
-  </form>
+  <div class="panel panel-pad searchbar">
+    <form method="post" action="/news/run">
+      <div class="searchrow" style="justify-content:space-between;">
+        <div style="display:flex; gap:9px; align-items:center;">
+          <button class="btn btn-primary" type="submit" {% if state.running %}disabled{% endif %}>
+            {% if state.running %}Fetching…{% else %}Refresh news{% endif %}
+          </button>
+          {% if notify_status != 'off' %}
+            <button class="btn btn-ghost" type="submit" formaction="/news/test-notify">Test alert</button>
+          {% endif %}
+        </div>
+        <div class="counts">
+          Auto-runs daily at <b>{{ news_time }}</b> · {{ items|length }} stories
+          {% if state.last_run %} · last run {{ state.last_run }}{% endif %}
+        </div>
+      </div>
+    </form>
+  </div>
 
   {% if state.running %}
-    <div class="banner">Fetching and summarising — this page refreshes every 4 seconds.</div>
+    <div class="banner">
+      <span class="pulse"></span>
+      <span>Fetching and summarising the latest AI news — this page refreshes every 4 seconds.</span>
+    </div>
   {% endif %}
 
   {% if state.log %}
     <div class="log">{% for line in state.log %}{{ line }}
 {% endfor %}</div>
   {% endif %}
+
+  <div class="sectionhead">
+    <h2>Latest AI news</h2>
+    <span class="counts">{{ items|length }} stories</span>
+  </div>
 
   <div class="newswrap">
 
@@ -532,69 +813,79 @@ NEWS_PAGE = """
           <div class="card">
             <h3><a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.title }}</a></h3>
             <div class="meta">
-              {% if item.source %}{{ item.source }}{% else %}{{ item.url | domain }}{% endif %}
-              {% if item.published %} · {{ item.published }}{% endif %}
+              <span class="sourcetag">{% if item.source %}{{ item.source }}{% else %}{{ item.url | domain }}{% endif %}</span>
+              {% if item.published %}<span>{{ item.published }}</span>{% endif %}
             </div>
             <p>{{ item.summary }}</p>
             <a class="cardlink" href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.url }}</a>
-            <div style="margin-top:11px;">
+            <div class="cardactions">
               {% if item.news_id in saved_ids %}
                 <form class="inline" method="post" action="/news/unsave/{{ item.news_id }}">
-                  <button class="iconbtn small" type="submit">&#9733; saved — remove</button>
+                  <button class="btn btn-sm btn-star" type="submit">&#9733; Saved — remove</button>
                 </form>
               {% else %}
                 <form class="inline" method="post" action="/news/save/{{ item.news_id }}">
-                  <button class="iconbtn small" type="submit">&#9734; save for later</button>
+                  <button class="btn btn-sm" type="submit">&#9734; Save for later</button>
                 </form>
               {% endif %}
               {% if notify_status != 'off' %}
                 <form class="inline" method="post" action="/news/push/{{ item.news_id }}">
-                  <button class="iconbtn small" type="submit" title="Send this story to your phone">
-                    &#128241; send to phone
-                  </button>
+                  <button class="btn btn-sm" type="submit" title="Send this story to your phone">&#128241; Send to phone</button>
                 </form>
               {% endif %}
             </div>
           </div>
         {% endfor %}
       {% else %}
-        <p class="muted">No news yet. Press <b>Refresh news</b> to fetch today's stories.</p>
+        <div class="panel empty">
+          <div class="big">&#128240;</div>
+          <p>No stories yet. Press <b>Refresh news</b> to fetch today's headlines.</p>
+        </div>
       {% endif %}
     </div>
 
     <div class="savedcol">
-      <h2>Saved for later <span class="muted">({{ saved_items|length }})</span></h2>
-      {% if saved_items and notify_status != 'off' %}
-        <form method="post" action="/news/push-saved" style="margin-bottom:10px;">
-          <button class="iconbtn small" type="submit">&#128241; send all saved to phone</button>
-        </form>
-      {% endif %}
-      <div class="savedscroll">
-        {% if saved_items %}
-          {% for item in saved_items %}
-            <div class="savedcard">
-              <a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.title }}</a>
-              <div class="meta">
-                {% if item.source %}{{ item.source }} · {% endif %}saved {{ item.saved_at }}
-              </div>
-              <form class="inline" method="post" action="/news/unsave/{{ item.news_id }}">
-                <button class="iconbtn small" type="submit">remove</button>
-              </form>
-              {% if notify_status != 'off' %}
-                <form class="inline" method="post" action="/news/push/{{ item.news_id }}">
-                  <button class="iconbtn small" type="submit">&#128241;</button>
-                </form>
-              {% endif %}
-            </div>
-          {% endfor %}
-        {% else %}
-          <p class="muted" style="font-size:13px;">Nothing saved yet. Use the star button on any story.</p>
+      <div class="savedhead">
+        <h2>Saved for later</h2>
+        <div class="n">{{ saved_items|length }} article{% if saved_items|length != 1 %}s{% endif %}</div>
+      </div>
+      <div class="savedbody">
+        {% if saved_items and notify_status != 'off' %}
+          <form method="post" action="/news/push-saved" style="margin-bottom:12px;">
+            <button class="btn btn-sm" type="submit" style="width:100%;">&#128241; Send all to phone</button>
+          </form>
         {% endif %}
+        <div class="savedscroll">
+          {% if saved_items %}
+            {% for item in saved_items %}
+              <div class="savedcard">
+                <a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.title }}</a>
+                <div class="meta" style="margin-bottom:8px;">
+                  {% if item.source %}<span class="sourcetag">{{ item.source }}</span>{% endif %}
+                  <span>saved {{ item.saved_at }}</span>
+                </div>
+                <div style="display:flex; gap:6px;">
+                  <form class="inline" method="post" action="/news/unsave/{{ item.news_id }}">
+                    <button class="btn btn-sm btn-ghost" type="submit">Remove</button>
+                  </form>
+                  {% if notify_status != 'off' %}
+                    <form class="inline" method="post" action="/news/push/{{ item.news_id }}">
+                      <button class="btn btn-sm btn-ghost" type="submit" title="Send to phone">&#128241;</button>
+                    </form>
+                  {% endif %}
+                </div>
+              </div>
+            {% endfor %}
+          {% else %}
+            <p class="muted" style="font-size:13px; padding:14px 0;">Nothing saved yet. Use the &#9734; button on any story.</p>
+          {% endif %}
+        </div>
       </div>
     </div>
 
   </div>
 
+</div>
 </body>
 </html>
 """
