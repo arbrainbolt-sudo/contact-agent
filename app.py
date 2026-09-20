@@ -155,9 +155,11 @@ def home():
 
 @app.route("/news")
 def news_page():
+    items = news.latest()
     return render_template_string(
         NEWS_PAGE,
-        items=news.latest(),
+        groups=news.group_by_category(items),
+        total_items=len(items),
         saved_items=news.saved(),
         saved_ids=news.saved_ids(),
         has_logo=logo_exists(),
@@ -507,7 +509,7 @@ STYLE = """
     .card h3 a:hover { color: var(--accent-dark); }
     .card p { margin: 0 0 13px; font-size: 14.5px; line-height: 1.62; color: #3a4658; }
 
-    .meta { display:flex; align-items:center; gap:9px; font-size: 12px; color: var(--ink-faint); margin-bottom: 11px; }
+    .meta { display:flex; align-items:center; gap:9px; font-size: 12px; color: var(--ink-faint); margin-bottom: 11px; flex-wrap:wrap; }
     .sourcetag {
       background: var(--accent-soft); color: var(--accent-dark);
       font-weight: 600; padding: 3px 9px; border-radius: 5px; font-size: 11.5px;
@@ -542,6 +544,52 @@ STYLE = """
     .empty { text-align:center; padding: 46px 22px; color: var(--ink-faint); }
     .empty .big { font-size: 34px; margin-bottom: 10px; opacity:.4; }
     .empty p { margin: 0; font-size: 14px; }
+
+    /* ---------------------------------------------------- news sections */
+    .jumpbar { display:flex; flex-wrap:wrap; gap:7px; margin: 20px 0 4px; }
+    .jumpbar a {
+      font-size: 12.5px; font-weight: 500; text-decoration:none;
+      color: var(--ink-soft); background: var(--surface);
+      border:1px solid var(--line); border-radius: 99px; padding: 6px 13px;
+      transition: all .13s;
+    }
+    .jumpbar a:hover { border-color: var(--accent); color: var(--accent-dark); background: var(--accent-soft); }
+    .jumpbar a .n { color: var(--ink-faint); font-weight: 600; margin-left: 4px; }
+
+    .catblock { margin-top: 30px; scroll-margin-top: 78px; }
+    .cathead {
+      display:flex; align-items:center; gap:11px;
+      padding: 0 0 11px; margin-bottom: 15px;
+      border-bottom: 2px solid var(--line);
+    }
+    .cathead .bar { width: 4px; height: 20px; border-radius: 3px; background: var(--accent); }
+    .cathead h2 {
+      margin:0; font-size: 16px; font-weight: 700; color: var(--brand); letter-spacing: -0.2px;
+    }
+    .cathead .n {
+      font-size: 11.5px; font-weight: 600; color: var(--accent-dark);
+      background: var(--accent-soft); padding: 2px 9px; border-radius: 99px;
+    }
+    .cathead .top { margin-left:auto; font-size:12px; color: var(--ink-faint); text-decoration:none; }
+    .cathead .top:hover { color: var(--accent-dark); }
+
+    /* one hue per section, in CATEGORIES order */
+    .cat-0 .bar { background:#6366f1; }
+    .cat-1 .bar { background:#0ea5e9; }
+    .cat-2 .bar { background:#8b5cf6; }
+    .cat-3 .bar { background:#0f766e; }
+    .cat-4 .bar { background:#16a34a; }
+    .cat-5 .bar { background:#ea580c; }
+    .cat-6 .bar { background:#0891b2; }
+    .cat-7 .bar { background:#b45309; }
+    .cat-8 .bar { background:#dc2626; }
+    .cat-9 .bar { background:#db2777; }
+
+    .cattag {
+      display:inline-block;
+      font-size: 11px; font-weight: 600; color: var(--ink-faint);
+      background: var(--line-soft); padding: 2px 8px; border-radius: 4px;
+    }
   </style>
 """
 
@@ -781,7 +829,7 @@ NEWS_PAGE = """
           {% endif %}
         </div>
         <div class="counts">
-          Auto-runs daily at <b>{{ news_time }}</b> · {{ items|length }} stories
+          Auto-runs daily at <b>{{ news_time }}</b> · {{ total_items }} stories in {{ groups|length }} sections
           {% if state.last_run %} · last run {{ state.last_run }}{% endif %}
         </div>
       </div>
@@ -791,7 +839,7 @@ NEWS_PAGE = """
   {% if state.running %}
     <div class="banner">
       <span class="pulse"></span>
-      <span>Fetching and summarising the latest AI news — this page refreshes every 4 seconds.</span>
+      <span>Fetching, summarising and sorting the latest AI news — this page refreshes every 4 seconds.</span>
     </div>
   {% endif %}
 
@@ -800,40 +848,54 @@ NEWS_PAGE = """
 {% endfor %}</div>
   {% endif %}
 
-  <div class="sectionhead">
-    <h2>Latest AI news</h2>
-    <span class="counts">{{ items|length }} stories</span>
-  </div>
+  {% if groups %}
+    <div class="jumpbar">
+      {% for category, stories in groups %}
+        <a href="#cat{{ loop.index0 }}">{{ category }}<span class="n">{{ stories|length }}</span></a>
+      {% endfor %}
+    </div>
+  {% endif %}
 
-  <div class="newswrap">
+  <div class="newswrap" style="margin-top:18px;">
 
     <div>
-      {% if items %}
-        {% for item in items %}
-          <div class="card">
-            <h3><a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.title }}</a></h3>
-            <div class="meta">
-              <span class="sourcetag">{% if item.source %}{{ item.source }}{% else %}{{ item.url | domain }}{% endif %}</span>
-              {% if item.published %}<span>{{ item.published }}</span>{% endif %}
+      {% if groups %}
+        {% for category, stories in groups %}
+          <div class="catblock cat-{{ loop.index0 }}" id="cat{{ loop.index0 }}">
+            <div class="cathead">
+              <span class="bar"></span>
+              <h2>{{ category }}</h2>
+              <span class="n">{{ stories|length }}</span>
+              <a class="top" href="#">&uarr; top</a>
             </div>
-            <p>{{ item.summary }}</p>
-            <a class="cardlink" href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.url }}</a>
-            <div class="cardactions">
-              {% if item.news_id in saved_ids %}
-                <form class="inline" method="post" action="/news/unsave/{{ item.news_id }}">
-                  <button class="btn btn-sm btn-star" type="submit">&#9733; Saved — remove</button>
-                </form>
-              {% else %}
-                <form class="inline" method="post" action="/news/save/{{ item.news_id }}">
-                  <button class="btn btn-sm" type="submit">&#9734; Save for later</button>
-                </form>
-              {% endif %}
-              {% if notify_status != 'off' %}
-                <form class="inline" method="post" action="/news/push/{{ item.news_id }}">
-                  <button class="btn btn-sm" type="submit" title="Send this story to your phone">&#128241; Send to phone</button>
-                </form>
-              {% endif %}
-            </div>
+
+            {% for item in stories %}
+              <div class="card">
+                <h3><a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.title }}</a></h3>
+                <div class="meta">
+                  <span class="sourcetag">{% if item.source %}{{ item.source }}{% else %}{{ item.url | domain }}{% endif %}</span>
+                  {% if item.published %}<span>{{ item.published }}</span>{% endif %}
+                </div>
+                <p>{{ item.summary }}</p>
+                <a class="cardlink" href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.url }}</a>
+                <div class="cardactions">
+                  {% if item.news_id in saved_ids %}
+                    <form class="inline" method="post" action="/news/unsave/{{ item.news_id }}">
+                      <button class="btn btn-sm btn-star" type="submit">&#9733; Saved — remove</button>
+                    </form>
+                  {% else %}
+                    <form class="inline" method="post" action="/news/save/{{ item.news_id }}">
+                      <button class="btn btn-sm" type="submit">&#9734; Save for later</button>
+                    </form>
+                  {% endif %}
+                  {% if notify_status != 'off' %}
+                    <form class="inline" method="post" action="/news/push/{{ item.news_id }}">
+                      <button class="btn btn-sm" type="submit" title="Send this story to your phone">&#128241; Send to phone</button>
+                    </form>
+                  {% endif %}
+                </div>
+              </div>
+            {% endfor %}
           </div>
         {% endfor %}
       {% else %}
@@ -859,7 +921,9 @@ NEWS_PAGE = """
           {% if saved_items %}
             {% for item in saved_items %}
               <div class="savedcard">
-                <a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.title }}</a>
+                {% if item.category %}<span class="cattag">{{ item.category }}</span>{% endif %}
+                <a href="{{ item.url }}" target="_blank" rel="noopener noreferrer"
+                   style="margin-top:6px;">{{ item.title }}</a>
                 <div class="meta" style="margin-bottom:8px;">
                   {% if item.source %}<span class="sourcetag">{{ item.source }}</span>{% endif %}
                   <span>saved {{ item.saved_at }}</span>

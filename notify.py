@@ -79,14 +79,15 @@ def send(text, log=print):
         if TELEGRAM_TOKEN and TELEGRAM_CHAT:
             _telegram(chunk, log)
         if TWILIO_SID and TWILIO_TOKEN and TWILIO_FROM and TWILIO_TO:
-            _whatsapp(chunk.replace("<b>", "*").replace("</b>", "*"), log)
+            _whatsapp(chunk.replace("<b>", "*").replace("</b>", "*")
+                           .replace("<i>", "_").replace("</i>", "_"), log)
         time.sleep(0.5)
 
 
-def run_finished(target, country, findings, error=None):
+def run_finished(target, country, findings, error=None, log=print):
     """Build and send the 'contact run complete' message."""
     if error:
-        return send(f"❌ <b>Contact Finder failed</b>\n{target}\n\n{error}")
+        return send(f"❌ <b>Contact Finder failed</b>\n{target}\n\n{error}", log=log)
 
     where = f" · {country}" if country else ""
     lines = ["✅ <b>Contact Finder done</b>",
@@ -101,15 +102,34 @@ def run_finished(target, country, findings, error=None):
         lines.append(f"…and {len(findings) - 5} more")
 
     lines.append("\nhttp://localhost:5000")
-    send("\n".join(lines))
+    send("\n".join(lines), log=log)
 
 
-def news_digest(items):
-    """Build and send the daily AI news digest."""
+def news_digest(items, log=print):
+    """Send the full digest, grouped into sections."""
     if not items:
-        return send("📰 <b>AI news</b>\nNothing found this time.")
-    lines = [f"📰 <b>AI news — {len(items)} stories</b>\n"]
-    for i in items:
-        first = i["summary"].split(". ")[0].strip().rstrip(".")
-        lines.append(f"<b>{i['title']}</b>\n{first}.\n{i['url']}\n")
-    send("\n".join(lines))
+        return send("📰 <b>AI news</b>\nNothing found this time.", log=log)
+
+    import news as _news       # local import avoids a circular dependency
+    groups = _news.group_by_category(items)
+
+    lines = [f"📰 <b>AI News — {len(items)} stories</b>"]
+    for category, stories in groups:
+        lines.append(f"\n━━━ <b>{category.upper()}</b> ━━━")
+        for i in stories:
+            source = i.get("source") or ""
+            meta = f"<i>{source}</i>\n" if source else ""
+            lines.append(f"\n<b>{i['title']}</b>\n{meta}{i['summary']}\n{i['url']}")
+
+    send("\n".join(lines), log=log)
+
+
+def news_item(item, log=print):
+    """Send a single story."""
+    source = item.get("source") or ""
+    category = item.get("category") or ""
+    head = f"📰 <b>{item['title']}</b>\n"
+    if category:
+        head = f"📰 <i>{category}</i>\n<b>{item['title']}</b>\n"
+    meta = f"<i>{source}</i>\n" if source else ""
+    send(f"{head}{meta}{item['summary']}\n\n{item['url']}", log=log)
