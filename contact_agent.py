@@ -1,8 +1,7 @@
-"""The brain. Finds PEOPLE and their contact details, saves them to results.csv"""
+"""The brain. Finds PEOPLE and their contact details, saves them to results.xlsx"""
 
 import os
 import re
-import csv
 import json
 import time
 import uuid
@@ -14,11 +13,11 @@ from bs4 import BeautifulSoup
 from ddgs import DDGS
 from dotenv import load_dotenv
 
+import store
+
 load_dotenv()
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 MODEL = "openrouter/free"
-
-CSV_FILE = "results.csv"
 
 FIELDS = ["row_id", "target", "country", "name", "role", "company", "email",
           "phone", "linkedin", "contacted", "comment", "confidence", "notes",
@@ -92,18 +91,15 @@ def normalize_linkedin(value):
 # ---------------------------------------------------------------- storage
 
 def _load():
-    if not os.path.exists(CSV_FILE):
-        return []
-    with open(CSV_FILE, newline="", encoding="utf-8") as f:
-        return [{k: (row.get(k) or "") for k in FIELDS} for row in csv.DictReader(f)]
+    return store.read_sheet(store.CONTACTS_SHEET, FIELDS)
 
 
 def _save(rows):
-    with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=FIELDS)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({k: row.get(k, "") for k in FIELDS})
+    store.write_sheet(store.CONTACTS_SHEET, FIELDS, rows)
+
+
+def clear_all():
+    store.clear_sheet(store.CONTACTS_SHEET)
 
 
 def _migrate(rows):
@@ -339,7 +335,6 @@ Reply with ONLY a JSON array of 4 strings. No markdown, no explanation."""
     ]
 
     out = parse_json(ask_llm(prompt), fallback=fallback)
-    # guard against a model returning something that isn't a list of strings
     if not isinstance(out, list) or not out:
         return fallback
     queries = [q for q in out if isinstance(q, str) and q.strip()]
@@ -414,7 +409,6 @@ def validate(person, page_text, place):
     """Throw away anything the model made up or mislocated. Returns cleaned person, or None."""
     lower_page = page_text.lower()
 
-    # force every expected field to be a plain string
     for key in ("name", "role", "company", "email", "phone", "linkedin",
                 "confidence", "notes", "location"):
         person[key] = _text(person, key)

@@ -1,6 +1,8 @@
-"""Sends a message when an agent run finishes. Silent no-op if not configured."""
+"""Sends messages to Telegram (and optionally WhatsApp). Silent no-op if not configured."""
 
 import os
+import time
+
 import requests
 from dotenv import load_dotenv
 
@@ -9,7 +11,7 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 TELEGRAM_CHAT = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-# Twilio WhatsApp (optional — see notes at the bottom of the chat)
+# Twilio WhatsApp (optional)
 TWILIO_SID = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
 TWILIO_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
 TWILIO_FROM = os.getenv("TWILIO_WHATSAPP_FROM", "").strip()   # e.g. whatsapp:+14155238886
@@ -40,7 +42,6 @@ def _telegram(text, log):
         if r.status_code == 200:
             log("   telegram sent")
         else:
-            # Telegram explains the problem clearly in the body — show it.
             log(f"   telegram failed {r.status_code}: {r.text[:200]}")
     except Exception as e:
         log(f"   telegram error: {e}")
@@ -63,20 +64,32 @@ def _whatsapp(text, log):
 
 
 def send(text, log=print):
-    """Send to every configured channel. Never raises."""
-    if TELEGRAM_TOKEN and TELEGRAM_CHAT:
-        _telegram(text, log)
-    if TWILIO_SID and TWILIO_TOKEN and TWILIO_FROM and TWILIO_TO:
-        _whatsapp(text.replace("<b>", "*").replace("</b>", "*"), log)
+    """Send to every configured channel, splitting long messages. Never raises."""
+    chunks = []
+    remaining = text
+    while len(remaining) > 3800:
+        cut = remaining.rfind("\n", 0, 3800)
+        if cut == -1:
+            cut = 3800
+        chunks.append(remaining[:cut])
+        remaining = remaining[cut:]
+    chunks.append(remaining)
+
+    for chunk in chunks:
+        if TELEGRAM_TOKEN and TELEGRAM_CHAT:
+            _telegram(chunk, log)
+        if TWILIO_SID and TWILIO_TOKEN and TWILIO_FROM and TWILIO_TO:
+            _whatsapp(chunk.replace("<b>", "*").replace("</b>", "*"), log)
+        time.sleep(0.5)
 
 
 def run_finished(target, country, findings, error=None):
-    """Build and send the 'run complete' message."""
+    """Build and send the 'contact run complete' message."""
     if error:
         return send(f"❌ <b>Contact Finder failed</b>\n{target}\n\n{error}")
 
     where = f" · {country}" if country else ""
-    lines = [f"✅ <b>Contact Finder done</b>",
+    lines = ["✅ <b>Contact Finder done</b>",
              f"{target}{where}",
              f"\n<b>{len(findings)}</b> new contact(s) found"]
 
@@ -88,4 +101,15 @@ def run_finished(target, country, findings, error=None):
         lines.append(f"…and {len(findings) - 5} more")
 
     lines.append("\nhttp://localhost:5000")
+    send("\n".join(lines))
+
+
+def news_digest(items):
+    """Build and send the daily AI news digest."""
+    if not items:
+        return send("📰 <b>AI news</b>\nNothing found this time.")
+    lines = [f"📰 <b>AI news — {len(items)} stories</b>\n"]
+    for i in items:
+        first = i["summary"].split(". ")[0].strip().rstrip(".")
+        lines.append(f"<b>{i['title']}</b>\n{first}.\n{i['url']}\n")
     send("\n".join(lines))
