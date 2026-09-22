@@ -19,12 +19,12 @@ load_dotenv()
 API_KEY = os.getenv("OPENROUTER_API_KEY")
 MODEL = "openrouter/free"
 
-FIELDS = ["row_id", "target", "country", "name", "role", "company", "email",
-          "phone", "linkedin", "contacted", "comment", "confidence", "notes",
-          "source_url", "found_at"]
+FIELDS = ["row_id", "search_date", "target", "country", "name", "role", "company",
+          "email", "phone", "linkedin", "contacted", "comment", "confidence",
+          "notes", "source_url", "found_at"]
 
-DISPLAY_FIELDS = ["comment", "target", "country", "name", "role", "company",
-                  "email", "phone", "linkedin", "confidence", "notes",
+DISPLAY_FIELDS = ["comment", "search_date", "target", "country", "name", "role",
+                  "company", "email", "phone", "linkedin", "confidence", "notes",
                   "source_url", "found_at"]
 
 # Columns you are allowed to edit by hand in the browser.
@@ -116,6 +116,10 @@ def _migrate(rows):
             if r.get(col) is None:
                 r[col] = ""
                 changed = True
+        # older rows have no search_date — derive it from found_at
+        if not r.get("search_date"):
+            r["search_date"] = (r.get("found_at") or "")[:10]
+            changed = True
         fixed = normalize_linkedin(r.get("linkedin"))
         if fixed != (r.get("linkedin") or ""):
             r["linkedin"] = fixed
@@ -132,10 +136,11 @@ def read_rows():
 
 
 def append_rows(new_rows):
+    """Newest findings go to the TOP, pushing older rows down."""
     with _lock:
         rows = _load()
         _migrate(rows)
-        rows.extend(new_rows)
+        rows = list(new_rows) + rows
         _save(rows)
 
 
@@ -435,93 +440,4 @@ def validate(person, page_text, place):
 
     if not person["name"]:
         return None
-    if not (person["email"] or person["phone"] or person["linkedin"]):
-        return None
-    return person
-
-
-# ---------------------------------------------------------------- the run
-
-def run_agent(target, country_code="", log=print):
-    place = country_name(country_code) if country_code else ""
-    region = country_region(country_code)
-
-    log(f"Planning searches for: {target}")
-    log(f"Country filter: {place or 'none (worldwide)'}  [region {region}]")
-
-    queries = plan_queries(target, place)
-    for q in queries:
-        log(f"   plan: {q}")
-
-    existing = read_rows()
-    seen_urls = {r["source_url"] for r in existing if r["target"] == target}
-    seen_people = {(r["name"].strip().lower(), r["email"].strip().lower()) for r in existing}
-
-    findings = []
-    pages_read = 0
-    dropped_location = 0
-
-    for q in queries:
-        if pages_read >= MAX_PAGES:
-            break
-        log(f"Searching: {q}")
-        hits = ddg_search(q, region, max_results=5, log=log)
-
-        for hit in hits:
-            if pages_read >= MAX_PAGES:
-                log("   page limit reached, stopping")
-                break
-
-            url = (hit.get("href") or "").strip()
-            if not url or url in seen_urls:
-                continue
-            seen_urls.add(url)
-
-            if "linkedin.com/in/" in url:
-                text = f"{hit.get('title', '')} {hit.get('body', '')} {url}"
-                log(f"   linkedin result: {url}")
-            else:
-                log(f"   reading {url}")
-                text = fetch_page(url)
-                if len(text) < 200:
-                    continue
-
-            hints = find_patterns(text)
-            pages_read += 1
-
-            for person in extract_people(target, url, text, hints, place):
-                if not isinstance(person, dict):
-                    continue
-                cleaned = validate(person, text, place)
-                if not cleaned:
-                    if person.get("name"):
-                        dropped_location += 1
-                    continue
-                person = cleaned
-
-                key = (person["name"].lower(), person["email"].lower())
-                if key in seen_people:
-                    continue
-                seen_people.add(key)
-
-                person["row_id"] = uuid.uuid4().hex[:12]
-                person["contacted"] = "no"
-                person["comment"] = ""
-                person["target"] = target
-                person["country"] = place
-                person["source_url"] = url
-                person["found_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-                findings.append(person)
-                log(f"      {person['name']} — {person['email'] or person['phone'] or person['linkedin']}")
-
-            time.sleep(PAUSE_SECONDS)
-
-    append_rows(findings)
-    extra = f", {dropped_location} rejected" if dropped_location else ""
-    log(f"Finished. Read {pages_read} pages, saved {len(findings)} new people{extra}.")
-    return findings
-
-
-if __name__ == "__main__":
-    run_agent(input("Who are you looking for? "),
-              input("Country code (e.g. US, blank for all): ").strip().upper())
+    if not (person["email"]

@@ -15,10 +15,11 @@ import notify
 app = Flask(__name__)
 
 state = {"running": False, "target": "", "country": "", "log": []}
-news_state = {"running": False, "log": [], "last_run": ""}
+news_state = {"running": False, "log": [], "last_run": "", "last_run_ts": 0.0}
 
 NO_COMPANY = "__blank__"
-NEWS_TIME = os.getenv("NEWS_TIME", "07:00")     # daily auto-run, 24h clock
+NEWS_TIME = os.getenv("NEWS_TIME", "07:00")                 # daily auto-run, 24h clock
+NEWS_COOLDOWN = int(os.getenv("NEWS_COOLDOWN", "300"))      # seconds between manual refreshes
 
 
 # ---------------------------------------------------------------- helpers
@@ -101,10 +102,21 @@ def news_worker(push=True):
         news_state["running"] = False
 
 
-def start_news_run(push=True):
+def news_cooldown_left():
+    """Seconds remaining before a manual refresh is allowed again."""
+    if not news_state["last_run_ts"]:
+        return 0
+    elapsed = time.time() - news_state["last_run_ts"]
+    return max(0, int(NEWS_COOLDOWN - elapsed))
+
+
+def start_news_run(push=True, force=False):
     if news_state["running"]:
         return False
+    if not force and news_cooldown_left() > 0:
+        return False
     news_state["running"] = True
+    news_state["last_run_ts"] = time.time()
     news_state["log"] = []
     threading.Thread(target=news_worker, args=(push,), daemon=True).start()
     return True
@@ -118,7 +130,7 @@ def scheduler():
         if now.strftime("%H:%M") == NEWS_TIME and done_on != date.today():
             done_on = date.today()
             print(f"[scheduler] daily news run at {NEWS_TIME}")
-            start_news_run(push=True)
+            start_news_run(push=True, force=True)
         time.sleep(30)
 
 
@@ -165,6 +177,7 @@ def news_page():
         has_logo=logo_exists(),
         notify_status=notify.status_line(),
         news_time=NEWS_TIME,
+        cooldown_left=news_cooldown_left(),
         tab="news",
         state=news_state,
     )
@@ -439,7 +452,7 @@ STYLE = """
     }
 
     /* ---------------------------------------------------- table */
-      .tablewrap {
+    .tablewrap {
       background: var(--surface); border:1px solid var(--line);
       border-radius: var(--radius); box-shadow: var(--shadow);
       max-height: calc(100vh - 210px);
@@ -469,6 +482,7 @@ STYLE = """
     .url { word-break: break-all; font-size: 11.5px; display:inline-block; max-width: 270px; }
     .srcname { font-weight: 600; color: var(--brand-light); }
     .muted { color: var(--ink-faint); font-weight: 400; }
+    .datecell { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
 
     .badge {
       display:inline-block; font-size: 11px; font-weight: 600;
@@ -692,7 +706,7 @@ CONTACTS_PAGE = """
         </div>
         <div>
           <label class="fieldlabel" for="q">Search all columns</label>
-          <input type="text" id="q" name="q" value="{{ q }}" placeholder="name, note, email, city…">
+          <input type="text" id="q" name="q" value="{{ q }}" placeholder="name, note, email, date…">
         </div>
         <div style="align-self:flex-end; display:flex; gap:8px; align-items:center;">
           <button class="btn" type="submit">Search</button>
@@ -704,7 +718,7 @@ CONTACTS_PAGE = """
 
   <div class="sectionhead">
     <h2>Contacts</h2>
-    <span class="counts">showing {{ rows|length }} of {{ total }}</span>
+    <span class="counts">showing {{ rows|length }} of {{ total }} · newest first</span>
     {% if contacted_count %}<span class="chip">{{ contacted_count }} contacted</span>{% endif %}
   </div>
 
@@ -764,6 +778,8 @@ CONTACTS_PAGE = """
               </td>
             {% elif f == 'confidence' %}
               <td>{% if value %}<span class="badge badge-{{ value|lower }}">{{ value }}</span>{% endif %}</td>
+            {% elif f in ('search_date', 'found_at') %}
+              <td class="datecell">{{ value }}</td>
             {% else %}
               <td>
                 {% if f == 'linkedin' and value %}
@@ -811,7 +827,8 @@ NEWS_PAGE = """
 <head>
   <meta charset="utf-8">
   <title>Hire2o — AI News</title>
-  {% if state.running %}<meta http-equiv="refresh" content="4">{% endif %}
+  {% if state.running %}<meta http-equiv="refresh" content="4">
+  {% elif cooldown_left %}<meta http-equiv="refresh" content="20">{% endif %}
 """ + STYLE + """
 </head>
 <body>
@@ -822,8 +839,11 @@ NEWS_PAGE = """
     <form method="post" action="/news/run">
       <div class="searchrow" style="justify-content:space-between;">
         <div style="display:flex; gap:9px; align-items:center;">
-          <button class="btn btn-primary" type="submit" {% if state.running %}disabled{% endif %}>
-            {% if state.running %}Fetching…{% else %}Refresh news{% endif %}
+          <button class="btn btn-primary" type="submit"
+                  {% if state.running or cooldown_left %}disabled{% endif %}>
+            {% if state.running %}Fetching…
+            {% elif cooldown_left %}Wait {{ (cooldown_left // 60) }}:{{ '%02d' % (cooldown_left % 60) }}
+            {% else %}Refresh news{% endif %}
           </button>
           {% if notify_status != 'off' %}
             <button class="btn btn-ghost" type="submit" formaction="/news/test-notify">Test alert</button>
