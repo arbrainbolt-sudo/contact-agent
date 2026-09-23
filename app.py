@@ -11,6 +11,7 @@ from flask import Flask, request, redirect, url_for, render_template_string
 import contact_agent
 import news
 import notify
+import store
 
 app = Flask(__name__)
 
@@ -20,6 +21,7 @@ news_state = {"running": False, "log": [], "last_run": "", "last_run_ts": 0.0}
 NO_COMPANY = "__blank__"
 NEWS_TIME = os.getenv("NEWS_TIME", "07:00")                 # daily auto-run, 24h clock
 NEWS_COOLDOWN = int(os.getenv("NEWS_COOLDOWN", "300"))      # seconds between manual refreshes
+CRM_SHEET = os.getenv("CRM_SHEET", "Sales")                 # default worksheet for the CRM tab
 
 
 # ---------------------------------------------------------------- helpers
@@ -180,6 +182,35 @@ def news_page():
         cooldown_left=news_cooldown_left(),
         tab="news",
         state=news_state,
+    )
+
+
+@app.route("/crm")
+def crm_page():
+    sheets = store.custom_sheets()
+    sheet = request.args.get("sheet", "") or (CRM_SHEET if CRM_SHEET in sheets
+                                              else (sheets[0] if sheets else CRM_SHEET))
+    q = request.args.get("q", "").strip()
+
+    headers, rows = store.read_sheet_auto(sheet)
+    total = len(rows)
+
+    if q:
+        needle = q.lower()
+        rows = [r for r in rows if any(needle in (v or "").lower() for v in r.values())]
+
+    return render_template_string(
+        CRM_PAGE,
+        sheets=sheets,
+        sheet=sheet,
+        headers=headers,
+        rows=rows,
+        total=total,
+        q=q,
+        workbook=store.XLSX_FILE,
+        has_logo=logo_exists(),
+        notify_status=notify.status_line(),
+        tab="crm",
     )
 
 
@@ -392,7 +423,8 @@ STYLE = """
       font-family: inherit; font-size: 14px; font-weight: 500; line-height:1;
       border: 1px solid var(--line); background: #fff; color: var(--ink);
       border-radius: 8px; padding: 11px 16px; cursor: pointer;
-      transition: all .13s; white-space: nowrap;
+      transition: all .13s; white-space: nowrap; text-decoration: none;
+      display: inline-block;
     }
     .btn:hover { border-color: #c9d2dd; background: #fafbfc; }
     .btn:active { transform: translateY(1px); }
@@ -623,6 +655,7 @@ HEADER = """
       <nav class="nav">
         <a href="/" class="{% if tab == 'contacts' %}on{% endif %}">Contacts</a>
         <a href="/news" class="{% if tab == 'news' %}on{% endif %}">AI News</a>
+        <a href="/crm" class="{% if tab == 'crm' %}on{% endif %}">CRM</a>
       </nav>
 
       <div class="spacer"></div>
@@ -969,6 +1002,105 @@ NEWS_PAGE = """
     </div>
 
   </div>
+
+</div>
+</body>
+</html>
+"""
+
+CRM_PAGE = """
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Hire2o — CRM</title>
+""" + STYLE + """
+</head>
+<body>
+""" + HEADER + """
+<div class="shell">
+
+  <div class="panel panel-pad searchbar">
+    <form method="get" action="/crm">
+      <div class="searchrow">
+        <div>
+          <label class="fieldlabel" for="sheet">Worksheet</label>
+          <select id="sheet" name="sheet" onchange="this.form.submit()">
+            {% if sheets %}
+              {% for s in sheets %}
+                <option value="{{ s }}" {% if s == sheet %}selected{% endif %}>{{ s }}</option>
+              {% endfor %}
+            {% else %}
+              <option value="{{ sheet }}">{{ sheet }}</option>
+            {% endif %}
+          </select>
+        </div>
+        <div>
+          <label class="fieldlabel" for="q">Search all columns</label>
+          <input type="text" id="q" name="q" value="{{ q }}" placeholder="name, company, stage…">
+        </div>
+        <div style="align-self:flex-end; display:flex; gap:8px; align-items:center;">
+          <button class="btn" type="submit">Search</button>
+          {% if q %}<a href="/crm?sheet={{ sheet }}" style="font-size:13px; color:var(--ink-soft);">Clear</a>{% endif %}
+          <a class="btn btn-ghost" href="/crm?sheet={{ sheet }}{% if q %}&q={{ q }}{% endif %}">Reload from file</a>
+        </div>
+      </div>
+    </form>
+  </div>
+
+  <div class="sectionhead">
+    <h2>{{ sheet }}</h2>
+    <span class="counts">
+      showing {{ rows|length }} of {{ total }} rows · {{ headers|length }} columns · read-only
+    </span>
+  </div>
+
+  {% if rows %}
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>{% for h in headers %}<th>{{ h }}</th>{% endfor %}</tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+            <tr>
+              {% for h in headers %}
+                {% set value = row.get(h, '') %}
+                <td>
+                  {% if value.startswith('http://') or value.startswith('https://') %}
+                    <a class="url" href="{{ value }}" target="_blank" rel="noopener noreferrer">{{ value }}</a>
+                  {% elif '@' in value and ' ' not in value and '.' in value %}
+                    <a href="mailto:{{ value }}">{{ value }}</a>
+                  {% else %}
+                    {{ value }}
+                  {% endif %}
+                </td>
+              {% endfor %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <p class="muted" style="font-size:12.5px; margin-top:14px;">
+      Live view of <b>{{ workbook }}</b> → sheet <b>{{ sheet }}</b>.
+      Edit it in Excel, save, close, then reload this page.
+    </p>
+
+  {% elif total %}
+    <div class="panel empty">
+      <div class="big">&#128269;</div>
+      <p>No rows match that search. <a href="/crm?sheet={{ sheet }}" style="color:var(--accent-dark);">Clear</a> to see all {{ total }}.</p>
+    </div>
+  {% else %}
+    <div class="panel empty">
+      <div class="big">&#128202;</div>
+      <p>
+        No worksheet named <b>{{ sheet }}</b> found in {{ workbook }} — or it has no rows.<br>
+        Add a sheet with column names in row 1, save and close Excel, then reload.
+      </p>
+    </div>
+  {% endif %}
 
 </div>
 </body>
