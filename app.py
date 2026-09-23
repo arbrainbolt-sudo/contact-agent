@@ -15,10 +15,11 @@ import notify
 app = Flask(__name__)
 
 state = {"running": False, "target": "", "country": "", "log": []}
-news_state = {"running": False, "log": [], "last_run": ""}
+news_state = {"running": False, "log": [], "last_run": "", "last_run_ts": 0.0}
 
 NO_COMPANY = "__blank__"
-NEWS_TIME = os.getenv("NEWS_TIME", "07:00")     # daily auto-run, 24h clock
+NEWS_TIME = os.getenv("NEWS_TIME", "07:00")                 # daily auto-run, 24h clock
+NEWS_COOLDOWN = int(os.getenv("NEWS_COOLDOWN", "300"))      # seconds between manual refreshes
 
 
 # ---------------------------------------------------------------- helpers
@@ -101,10 +102,21 @@ def news_worker(push=True):
         news_state["running"] = False
 
 
-def start_news_run(push=True):
+def news_cooldown_left():
+    """Seconds remaining before a manual refresh is allowed again."""
+    if not news_state["last_run_ts"]:
+        return 0
+    elapsed = time.time() - news_state["last_run_ts"]
+    return max(0, int(NEWS_COOLDOWN - elapsed))
+
+
+def start_news_run(push=True, force=False):
     if news_state["running"]:
         return False
+    if not force and news_cooldown_left() > 0:
+        return False
     news_state["running"] = True
+    news_state["last_run_ts"] = time.time()
     news_state["log"] = []
     threading.Thread(target=news_worker, args=(push,), daemon=True).start()
     return True
@@ -118,7 +130,7 @@ def scheduler():
         if now.strftime("%H:%M") == NEWS_TIME and done_on != date.today():
             done_on = date.today()
             print(f"[scheduler] daily news run at {NEWS_TIME}")
-            start_news_run(push=True)
+            start_news_run(push=True, force=True)
         time.sleep(30)
 
 
@@ -155,14 +167,17 @@ def home():
 
 @app.route("/news")
 def news_page():
+    items = news.latest()
     return render_template_string(
         NEWS_PAGE,
-        items=news.latest(),
+        groups=news.group_by_category(items),
+        total_items=len(items),
         saved_items=news.saved(),
         saved_ids=news.saved_ids(),
         has_logo=logo_exists(),
         notify_status=notify.status_line(),
         news_time=NEWS_TIME,
+        cooldown_left=news_cooldown_left(),
         tab="news",
         state=news_state,
     )
@@ -440,14 +455,15 @@ STYLE = """
     .tablewrap {
       background: var(--surface); border:1px solid var(--line);
       border-radius: var(--radius); box-shadow: var(--shadow);
-      overflow-x: auto; overflow-y: visible;
+      max-height: calc(100vh - 210px);
+      overflow: auto;
     }
     table { border-collapse: separate; border-spacing:0; width:100%; font-size: 13.5px; }
     thead th {
       background: #f7f9fb; color: var(--ink-soft);
       font-size: 11px; font-weight: 600; letter-spacing:.055em; text-transform: uppercase;
       text-align:left; padding: 11px 12px; white-space: nowrap;
-      border-bottom: 1px solid var(--line); position: sticky; top: 62px; z-index: 5;
+      border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5;
     }
     tbody td {
       padding: 9px 12px; vertical-align: top;
@@ -466,6 +482,7 @@ STYLE = """
     .url { word-break: break-all; font-size: 11.5px; display:inline-block; max-width: 270px; }
     .srcname { font-weight: 600; color: var(--brand-light); }
     .muted { color: var(--ink-faint); font-weight: 400; }
+    .datecell { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
 
     .badge {
       display:inline-block; font-size: 11px; font-weight: 600;
@@ -507,7 +524,7 @@ STYLE = """
     .card h3 a:hover { color: var(--accent-dark); }
     .card p { margin: 0 0 13px; font-size: 14.5px; line-height: 1.62; color: #3a4658; }
 
-    .meta { display:flex; align-items:center; gap:9px; font-size: 12px; color: var(--ink-faint); margin-bottom: 11px; }
+    .meta { display:flex; align-items:center; gap:9px; font-size: 12px; color: var(--ink-faint); margin-bottom: 11px; flex-wrap:wrap; }
     .sourcetag {
       background: var(--accent-soft); color: var(--accent-dark);
       font-weight: 600; padding: 3px 9px; border-radius: 5px; font-size: 11.5px;
@@ -542,6 +559,52 @@ STYLE = """
     .empty { text-align:center; padding: 46px 22px; color: var(--ink-faint); }
     .empty .big { font-size: 34px; margin-bottom: 10px; opacity:.4; }
     .empty p { margin: 0; font-size: 14px; }
+
+    /* ---------------------------------------------------- news sections */
+    .jumpbar { display:flex; flex-wrap:wrap; gap:7px; margin: 20px 0 4px; }
+    .jumpbar a {
+      font-size: 12.5px; font-weight: 500; text-decoration:none;
+      color: var(--ink-soft); background: var(--surface);
+      border:1px solid var(--line); border-radius: 99px; padding: 6px 13px;
+      transition: all .13s;
+    }
+    .jumpbar a:hover { border-color: var(--accent); color: var(--accent-dark); background: var(--accent-soft); }
+    .jumpbar a .n { color: var(--ink-faint); font-weight: 600; margin-left: 4px; }
+
+    .catblock { margin-top: 30px; scroll-margin-top: 78px; }
+    .cathead {
+      display:flex; align-items:center; gap:11px;
+      padding: 0 0 11px; margin-bottom: 15px;
+      border-bottom: 2px solid var(--line);
+    }
+    .cathead .bar { width: 4px; height: 20px; border-radius: 3px; background: var(--accent); }
+    .cathead h2 {
+      margin:0; font-size: 16px; font-weight: 700; color: var(--brand); letter-spacing: -0.2px;
+    }
+    .cathead .n {
+      font-size: 11.5px; font-weight: 600; color: var(--accent-dark);
+      background: var(--accent-soft); padding: 2px 9px; border-radius: 99px;
+    }
+    .cathead .top { margin-left:auto; font-size:12px; color: var(--ink-faint); text-decoration:none; }
+    .cathead .top:hover { color: var(--accent-dark); }
+
+    /* one hue per section, in CATEGORIES order */
+    .cat-0 .bar { background:#6366f1; }
+    .cat-1 .bar { background:#0ea5e9; }
+    .cat-2 .bar { background:#8b5cf6; }
+    .cat-3 .bar { background:#0f766e; }
+    .cat-4 .bar { background:#16a34a; }
+    .cat-5 .bar { background:#ea580c; }
+    .cat-6 .bar { background:#0891b2; }
+    .cat-7 .bar { background:#b45309; }
+    .cat-8 .bar { background:#dc2626; }
+    .cat-9 .bar { background:#db2777; }
+
+    .cattag {
+      display:inline-block;
+      font-size: 11px; font-weight: 600; color: var(--ink-faint);
+      background: var(--line-soft); padding: 2px 8px; border-radius: 4px;
+    }
   </style>
 """
 
@@ -643,7 +706,7 @@ CONTACTS_PAGE = """
         </div>
         <div>
           <label class="fieldlabel" for="q">Search all columns</label>
-          <input type="text" id="q" name="q" value="{{ q }}" placeholder="name, note, email, city…">
+          <input type="text" id="q" name="q" value="{{ q }}" placeholder="name, note, email, date…">
         </div>
         <div style="align-self:flex-end; display:flex; gap:8px; align-items:center;">
           <button class="btn" type="submit">Search</button>
@@ -655,7 +718,7 @@ CONTACTS_PAGE = """
 
   <div class="sectionhead">
     <h2>Contacts</h2>
-    <span class="counts">showing {{ rows|length }} of {{ total }}</span>
+    <span class="counts">showing {{ rows|length }} of {{ total }} · newest first</span>
     {% if contacted_count %}<span class="chip">{{ contacted_count }} contacted</span>{% endif %}
   </div>
 
@@ -715,6 +778,8 @@ CONTACTS_PAGE = """
               </td>
             {% elif f == 'confidence' %}
               <td>{% if value %}<span class="badge badge-{{ value|lower }}">{{ value }}</span>{% endif %}</td>
+            {% elif f in ('search_date', 'found_at') %}
+              <td class="datecell">{{ value }}</td>
             {% else %}
               <td>
                 {% if f == 'linkedin' and value %}
@@ -762,7 +827,8 @@ NEWS_PAGE = """
 <head>
   <meta charset="utf-8">
   <title>Hire2o — AI News</title>
-  {% if state.running %}<meta http-equiv="refresh" content="4">{% endif %}
+  {% if state.running %}<meta http-equiv="refresh" content="4">
+  {% elif cooldown_left %}<meta http-equiv="refresh" content="20">{% endif %}
 """ + STYLE + """
 </head>
 <body>
@@ -773,15 +839,18 @@ NEWS_PAGE = """
     <form method="post" action="/news/run">
       <div class="searchrow" style="justify-content:space-between;">
         <div style="display:flex; gap:9px; align-items:center;">
-          <button class="btn btn-primary" type="submit" {% if state.running %}disabled{% endif %}>
-            {% if state.running %}Fetching…{% else %}Refresh news{% endif %}
+          <button class="btn btn-primary" type="submit"
+                  {% if state.running or cooldown_left %}disabled{% endif %}>
+            {% if state.running %}Fetching…
+            {% elif cooldown_left %}Wait {{ (cooldown_left // 60) }}:{{ '%02d' % (cooldown_left % 60) }}
+            {% else %}Refresh news{% endif %}
           </button>
           {% if notify_status != 'off' %}
             <button class="btn btn-ghost" type="submit" formaction="/news/test-notify">Test alert</button>
           {% endif %}
         </div>
         <div class="counts">
-          Auto-runs daily at <b>{{ news_time }}</b> · {{ items|length }} stories
+          Auto-runs daily at <b>{{ news_time }}</b> · {{ total_items }} stories in {{ groups|length }} sections
           {% if state.last_run %} · last run {{ state.last_run }}{% endif %}
         </div>
       </div>
@@ -791,7 +860,7 @@ NEWS_PAGE = """
   {% if state.running %}
     <div class="banner">
       <span class="pulse"></span>
-      <span>Fetching and summarising the latest AI news — this page refreshes every 4 seconds.</span>
+      <span>Fetching, summarising and sorting the latest AI news — this page refreshes every 4 seconds.</span>
     </div>
   {% endif %}
 
@@ -800,40 +869,54 @@ NEWS_PAGE = """
 {% endfor %}</div>
   {% endif %}
 
-  <div class="sectionhead">
-    <h2>Latest AI news</h2>
-    <span class="counts">{{ items|length }} stories</span>
-  </div>
+  {% if groups %}
+    <div class="jumpbar">
+      {% for category, stories in groups %}
+        <a href="#cat{{ loop.index0 }}">{{ category }}<span class="n">{{ stories|length }}</span></a>
+      {% endfor %}
+    </div>
+  {% endif %}
 
-  <div class="newswrap">
+  <div class="newswrap" style="margin-top:18px;">
 
     <div>
-      {% if items %}
-        {% for item in items %}
-          <div class="card">
-            <h3><a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.title }}</a></h3>
-            <div class="meta">
-              <span class="sourcetag">{% if item.source %}{{ item.source }}{% else %}{{ item.url | domain }}{% endif %}</span>
-              {% if item.published %}<span>{{ item.published }}</span>{% endif %}
+      {% if groups %}
+        {% for category, stories in groups %}
+          <div class="catblock cat-{{ loop.index0 }}" id="cat{{ loop.index0 }}">
+            <div class="cathead">
+              <span class="bar"></span>
+              <h2>{{ category }}</h2>
+              <span class="n">{{ stories|length }}</span>
+              <a class="top" href="#">&uarr; top</a>
             </div>
-            <p>{{ item.summary }}</p>
-            <a class="cardlink" href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.url }}</a>
-            <div class="cardactions">
-              {% if item.news_id in saved_ids %}
-                <form class="inline" method="post" action="/news/unsave/{{ item.news_id }}">
-                  <button class="btn btn-sm btn-star" type="submit">&#9733; Saved — remove</button>
-                </form>
-              {% else %}
-                <form class="inline" method="post" action="/news/save/{{ item.news_id }}">
-                  <button class="btn btn-sm" type="submit">&#9734; Save for later</button>
-                </form>
-              {% endif %}
-              {% if notify_status != 'off' %}
-                <form class="inline" method="post" action="/news/push/{{ item.news_id }}">
-                  <button class="btn btn-sm" type="submit" title="Send this story to your phone">&#128241; Send to phone</button>
-                </form>
-              {% endif %}
-            </div>
+
+            {% for item in stories %}
+              <div class="card">
+                <h3><a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.title }}</a></h3>
+                <div class="meta">
+                  <span class="sourcetag">{% if item.source %}{{ item.source }}{% else %}{{ item.url | domain }}{% endif %}</span>
+                  {% if item.published %}<span>{{ item.published }}</span>{% endif %}
+                </div>
+                <p>{{ item.summary }}</p>
+                <a class="cardlink" href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.url }}</a>
+                <div class="cardactions">
+                  {% if item.news_id in saved_ids %}
+                    <form class="inline" method="post" action="/news/unsave/{{ item.news_id }}">
+                      <button class="btn btn-sm btn-star" type="submit">&#9733; Saved — remove</button>
+                    </form>
+                  {% else %}
+                    <form class="inline" method="post" action="/news/save/{{ item.news_id }}">
+                      <button class="btn btn-sm" type="submit">&#9734; Save for later</button>
+                    </form>
+                  {% endif %}
+                  {% if notify_status != 'off' %}
+                    <form class="inline" method="post" action="/news/push/{{ item.news_id }}">
+                      <button class="btn btn-sm" type="submit" title="Send this story to your phone">&#128241; Send to phone</button>
+                    </form>
+                  {% endif %}
+                </div>
+              </div>
+            {% endfor %}
           </div>
         {% endfor %}
       {% else %}
@@ -859,7 +942,9 @@ NEWS_PAGE = """
           {% if saved_items %}
             {% for item in saved_items %}
               <div class="savedcard">
-                <a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.title }}</a>
+                {% if item.category %}<span class="cattag">{{ item.category }}</span>{% endif %}
+                <a href="{{ item.url }}" target="_blank" rel="noopener noreferrer"
+                   style="margin-top:6px;">{{ item.title }}</a>
                 <div class="meta" style="margin-bottom:8px;">
                   {% if item.source %}<span class="sourcetag">{{ item.source }}</span>{% endif %}
                   <span>saved {{ item.saved_at }}</span>
