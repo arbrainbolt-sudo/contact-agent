@@ -23,7 +23,8 @@ NEWS_TIME = os.getenv("NEWS_TIME", "07:00")                 # daily auto-run, 24
 NEWS_COOLDOWN = int(os.getenv("NEWS_COOLDOWN", "300"))      # seconds between manual refreshes
 CRM_SHEET = os.getenv("CRM_SHEET", "Sales")                 # default worksheet for the CRM tab
 CRM_STALE_DAYS = int(os.getenv("CRM_STALE_DAYS", "30"))     # "needs reconnecting" threshold
-CRM_WIDE_COL = os.getenv("CRM_WIDE_COL", "activity")        # column rendered 4x wider
+CRM_WIDE_COL = os.getenv("CRM_WIDE_COL", "activity")        # column rendered 4x wider + editable
+CRM_MAX_COLS = int(os.getenv("CRM_MAX_COLS", "6"))          # hide columns 7 onwards
 
 
 # ---------------------------------------------------------------- helpers
@@ -125,9 +126,7 @@ def crm_boxes(headers, rows):
     def label(row):
         who = (row.get(name_col, "") if name_col else "").strip()
         org = (row.get(company_col, "") if company_col else "").strip()
-        if who and org and who.lower() != org.lower():
-            return who, org
-        return (who or org or "(unnamed)"), ""
+        return (who or "(no name)"), org
 
     # ---- box 1: calls and follow-ups outstanding
     followups = []
@@ -160,7 +159,7 @@ def crm_boxes(headers, rows):
         if last and last >= cutoff:
             continue                       # contacted recently enough
         who, org = label(row)
-        if who == "(unnamed)" and not org:
+        if who == "(no name)" and not org:
             continue
         stale.append({
             "who": who, "org": org,
@@ -307,32 +306,73 @@ def crm_page():
     sheet = request.args.get("sheet", "") or (CRM_SHEET if CRM_SHEET in sheets
                                               else (sheets[0] if sheets else CRM_SHEET))
     q = request.args.get("q", "").strip()
+    adding = request.args.get("add", "") == "1"
 
     headers, all_rows = store.read_sheet_auto(sheet)
     total = len(all_rows)
 
     boxes = crm_boxes(headers, all_rows)      # always from the FULL sheet
 
+    # column numbers are 1-based and match Excel
+    all_cols = [(i + 1, h) for i, h in enumerate(headers)]
+    columns = all_cols[:CRM_MAX_COLS]
+    wide = CRM_WIDE_COL.strip().lower()
+    for col in all_cols[CRM_MAX_COLS:]:       # keep the wide column even if further right
+        if wide and wide in col[1].lower():
+            columns.append(col)
+
     rows = all_rows
     if q:
         needle = q.lower()
-        rows = [r for r in rows if any(needle in (v or "").lower() for v in r.values())]
+        rows = [r for r in rows
+                if any(needle in (v or "").lower()
+                       for k, v in r.items() if k != "_row")]
 
     return render_template_string(
         CRM_PAGE,
         sheets=sheets,
         sheet=sheet,
-        headers=headers,
+        columns=columns,
+        hidden_count=max(0, len(all_cols) - len(columns)),
         rows=rows,
         total=total,
         q=q,
+        adding=adding,
         boxes=boxes,
-        wide_col=CRM_WIDE_COL.strip().lower(),
+        wide_col=wide,
         workbook=store.XLSX_FILE,
         has_logo=logo_exists(),
         notify_status=notify.status_line(),
         tab="crm",
     )
+
+
+@app.route("/crm/edit", methods=["POST"])
+def crm_edit():
+    sheet = request.form.get("sheet", "")
+    try:
+        excel_row = int(request.form.get("row", "0"))
+        col = int(request.form.get("col", "0"))
+    except ValueError:
+        excel_row = col = 0
+    if sheet and excel_row and col:
+        store.update_cell(sheet, excel_row, col, request.form.get("value", "").strip())
+    return redirect(url_for("crm_page", sheet=sheet, q=request.form.get("q", "") or None))
+
+
+@app.route("/crm/add", methods=["POST"])
+def crm_add():
+    sheet = request.form.get("sheet", "")
+    values = {}
+    for key, val in request.form.items():
+        if key.startswith("col_"):
+            try:
+                values[int(key[4:])] = val.strip()
+            except ValueError:
+                continue
+    if sheet and any(values.values()):
+        store.append_blank_row(sheet, values)
+    return redirect(url_for("crm_page", sheet=sheet))
 
 
 @app.route("/news/run", methods=["POST"])
@@ -784,6 +824,18 @@ STYLE = """
 
     .boxempty { padding: 26px 18px; text-align:center; color: var(--ink-faint); font-size: 13px; }
     .boxnote { font-size: 11.5px; color: var(--ink-faint); padding: 10px 18px; border-top: 1px solid var(--line-soft); }
+
+    /* ---------------------------------------------------- CRM add row */
+    .addrow { background: var(--accent-soft); }
+    .addrow td { padding: 10px 12px; }
+    .addrow input, .addrow textarea {
+      width: 100%; font-size: 13px; padding: 7px 9px;
+      border: 1px solid #b9dede; border-radius: 6px; background:#fff;
+    }
+    .hiddennote {
+      font-size: 11.5px; color: var(--ink-faint); margin-left: 6px;
+      background: var(--line-soft); padding: 2px 8px; border-radius: 4px;
+    }
   </style>
 """
 
@@ -1181,7 +1233,7 @@ CRM_PAGE = """
             <div class="boxitem">
               <div>
                 <span class="who">{{ f.who }}</span>
-                {% if f.org %}<span class="org">{{ f.org }}</span>{% endif %}
+                {% if f.org %}<span class="org">&middot; {{ f.org }}</span>{% endif %}
                 {% if f.overdue %}
                   <span class="pill pill-over">{{ f.days_over }}d overdue</span>
                 {% elif f.due %}
@@ -1222,7 +1274,7 @@ CRM_PAGE = """
             <div class="boxitem">
               <div>
                 <span class="who">{{ s.who }}</span>
-                {% if s.org %}<span class="org">{{ s.org }}</span>{% endif %}
+                {% if s.org %}<span class="org">&middot; {{ s.org }}</span>{% endif %}
                 {% if s.days %}
                   <span class="pill pill-cold">{{ s.days }} days</span>
                 {% else %}
@@ -1272,7 +1324,7 @@ CRM_PAGE = """
         <div style="align-self:flex-end; display:flex; gap:8px; align-items:center;">
           <button class="btn" type="submit">Search</button>
           {% if q %}<a href="/crm?sheet={{ sheet }}" style="font-size:13px; color:var(--ink-soft);">Clear</a>{% endif %}
-          <a class="btn btn-ghost" href="/crm?sheet={{ sheet }}{% if q %}&q={{ q }}{% endif %}">Reload from file</a>
+          <a class="btn btn-primary" href="/crm?sheet={{ sheet }}&add=1">+ Add row</a>
         </div>
       </div>
     </form>
@@ -1280,58 +1332,95 @@ CRM_PAGE = """
 
   <div class="sectionhead">
     <h2>{{ sheet }}</h2>
-    <span class="counts">
-      showing {{ rows|length }} of {{ total }} rows · {{ headers|length }} columns · read-only
-    </span>
+    <span class="counts">showing {{ rows|length }} of {{ total }} rows</span>
+    {% if hidden_count %}
+      <span class="hiddennote">{{ hidden_count }} column{% if hidden_count != 1 %}s{% endif %} hidden</span>
+    {% endif %}
   </div>
 
-  {% if rows %}
+  {% if columns %}
     <div class="tablewrap">
       <table>
         <thead>
           <tr>
-            {% for h in headers %}
-              <th class="{% if wide_col in h.lower() %}wide4{% endif %}">{{ h }}</th>
+            {% for col_num, h in columns %}
+              <th class="{% if wide_col and wide_col in h.lower() %}wide4{% endif %}">{{ h }}</th>
             {% endfor %}
           </tr>
         </thead>
         <tbody>
-          {% for row in rows %}
-            <tr>
-              {% for h in headers %}
-                {% set value = row.get(h, '') %}
-                <td class="{% if wide_col in h.lower() %}wide4{% endif %}">
-                  {% if value.startswith('http://') or value.startswith('https://') %}
-                    <a class="url" href="{{ value }}" target="_blank" rel="noopener noreferrer">{{ value }}</a>
-                  {% elif '@' in value and ' ' not in value and '.' in value %}
-                    <a href="mailto:{{ value }}">{{ value }}</a>
+
+          {% if adding %}
+            <tr class="addrow">
+              <form method="post" action="/crm/add" id="addform">
+                <input type="hidden" name="sheet" value="{{ sheet }}">
+              </form>
+              {% for col_num, h in columns %}
+                <td class="{% if wide_col and wide_col in h.lower() %}wide4{% endif %}">
+                  {% if wide_col and wide_col in h.lower() %}
+                    <textarea form="addform" name="col_{{ col_num }}" rows="3"
+                              placeholder="{{ h }}…"></textarea>
                   {% else %}
-                    {{ value }}
+                    <input form="addform" type="text" name="col_{{ col_num }}" placeholder="{{ h }}">
                   {% endif %}
                 </td>
               {% endfor %}
             </tr>
+            <tr class="addrow">
+              <td colspan="{{ columns|length }}" style="padding-top:0;">
+                <button class="btn btn-primary btn-sm" form="addform" type="submit">Save new row</button>
+                <a class="btn btn-ghost btn-sm" href="/crm?sheet={{ sheet }}">Cancel</a>
+              </td>
+            </tr>
+          {% endif %}
+
+          {% for row in rows %}
+            <tr>
+              {% for col_num, h in columns %}
+                {% set value = row.get(h, '') %}
+                {% if wide_col and wide_col in h.lower() %}
+                  <td class="wide4">
+                    <form class="cellform" method="post" action="/crm/edit">
+                      <input type="hidden" name="sheet" value="{{ sheet }}">
+                      <input type="hidden" name="row" value="{{ row._row }}">
+                      <input type="hidden" name="col" value="{{ col_num }}">
+                      <input type="hidden" name="q" value="{{ q }}">
+                      <textarea class="cellin" name="value" rows="3"
+                                placeholder="Add activity…"
+                                onblur="if(this.defaultValue!==this.value){this.form.submit();}">{{ value }}</textarea>
+                    </form>
+                  </td>
+                {% else %}
+                  <td>
+                    {% if value.startswith('http://') or value.startswith('https://') %}
+                      <a class="url" href="{{ value }}" target="_blank" rel="noopener noreferrer">{{ value }}</a>
+                    {% elif '@' in value and ' ' not in value and '.' in value %}
+                      <a href="mailto:{{ value }}">{{ value }}</a>
+                    {% else %}
+                      {{ value }}
+                    {% endif %}
+                  </td>
+                {% endif %}
+              {% endfor %}
+            </tr>
           {% endfor %}
+
         </tbody>
       </table>
     </div>
 
     <p class="muted" style="font-size:12.5px; margin-top:14px;">
-      Live view of <b>{{ workbook }}</b> → sheet <b>{{ sheet }}</b>.
-      Edit it in Excel, save, close, then reload this page.
+      <b>{{ workbook }}</b> → sheet <b>{{ sheet }}</b>.
+      The <b>{{ wide_col }}</b> column saves when you click away from it.
+      Keep the file closed in Excel while using this page.
     </p>
 
-  {% elif total %}
-    <div class="panel empty">
-      <div class="big">&#128269;</div>
-      <p>No rows match that search. <a href="/crm?sheet={{ sheet }}" style="color:var(--accent-dark);">Clear</a> to see all {{ total }}.</p>
-    </div>
   {% else %}
     <div class="panel empty">
       <div class="big">&#128202;</div>
       <p>
-        No worksheet named <b>{{ sheet }}</b> found in {{ workbook }} — or it has no rows.<br>
-        Add a sheet with column names in row 1, save and close Excel, then reload.
+        No worksheet named <b>{{ sheet }}</b> found in {{ workbook }} — or it has no header row.<br>
+        Add column names in row 1, save and close Excel, then reload.
       </p>
     </div>
   {% endif %}
