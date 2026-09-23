@@ -173,7 +173,6 @@ def crm_boxes(headers, rows):
     followups.sort(key=lambda f: (f["due"] is None, f["due"] or today))
 
     # ---- box 2: gone quiet for more than CRM_STALE_DAYS
-    # ---- box 2: gone quiet for more than CRM_STALE_DAYS
     # Dates come from the Activity notes first, falling back to a date column.
     stale = []
     for row in rows:
@@ -196,7 +195,7 @@ def crm_boxes(headers, rows):
 
         stale.append({
             "who": who, "org": org,
-            "last_raw": last.strftime("%b %-d, %Y") if last else "",
+            "last_raw": last.strftime("%b %d, %Y") if last else "",
             "last_line": last_line,
             "last": last,
             "source": source,
@@ -536,7 +535,7 @@ STYLE = """
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     /* ============================================================
-       BRAND PALETTE — change these five lines to re-theme the app
+       BRAND PALETTE - change these five lines to re-theme the app
        ============================================================ */
     :root {
       --brand:        #0f2f5c;
@@ -712,8 +711,11 @@ STYLE = """
       text-align:left; padding: 11px 12px; white-space: nowrap;
       border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5;
     }
-    tbody td { padding: 9px 12px; vertical-align: top; border-bottom: 1px solid var(--line-soft); height: 1px; }
-            tbody tr:hover { background: #fbfcfd; }
+    tbody td {
+      padding: 9px 12px; vertical-align: top;
+      border-bottom: 1px solid var(--line-soft); height: 1px;
+    }
+    tbody tr:hover { background: #fbfcfd; }
     tbody tr:last-child td { border-bottom: none; }
 
     tr.done { background: var(--green-soft); }
@@ -728,7 +730,7 @@ STYLE = """
     .muted { color: var(--ink-faint); font-weight: 400; }
     .datecell { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
 
-    /* the wide column (Activity by default) — roughly 4x a normal cell */
+    /* the wide column (Activity by default) - roughly 4x a normal cell */
     th.wide4 { min-width: 620px; }
     td.wide4 {
       min-width: 620px; max-width: 760px;
@@ -756,7 +758,8 @@ STYLE = """
       border-color: var(--accent); background:#fff; outline:none; box-shadow: 0 0 0 3px var(--accent-soft);
     }
     .cellin::placeholder { color: #c3ccd6; }
-    textarea.cellin { resize: vertical; font-size: 12.5px; line-height:1.45; display: block; }    td.editable { min-width: 155px; }
+    textarea.cellin { resize: vertical; font-size: 12.5px; line-height:1.45; display: block; }
+    td.editable { min-width: 155px; }
     td.commentcell { min-width: 225px; max-width: 270px; }
 
     /* ---------------------------------------------------- news */
@@ -878,7 +881,7 @@ STYLE = """
     .boxitem .who, .sugg .who { font-weight: 600; font-size: 13.5px; color: var(--brand); }
     .boxitem .org, .sugg .org { font-size: 12.5px; color: var(--ink-faint); margin-left: 4px; }
     .boxitem .what { font-size: 13px; color: #3a4658; margin-top: 3px; line-height:1.45; }
-    .boxitem .when { font-size: 11.5px; color: var(--ink-faint); margin-top: 4px; }
+    .boxitem .when { font-size: 11.5px; color: var(--ink-faint); margin-top: 4px; line-height:1.5; }
 
     .pill {
       display:inline-block; font-size: 10.5px; font-weight: 700; letter-spacing:.03em;
@@ -953,7 +956,7 @@ CONTACTS_PAGE = """
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Hire2o — Contacts</title>
+  <title>Hire2o - Contacts</title>
   {% if state.running %}<meta http-equiv="refresh" content="3">{% endif %}
 """ + STYLE + """
 </head>
@@ -982,7 +985,7 @@ CONTACTS_PAGE = """
         </div>
         <div style="align-self:flex-end; display:flex; gap:8px;">
           <button class="btn btn-primary" type="submit" {% if state.running %}disabled{% endif %}>
-            {% if state.running %}Searching…{% else %}Find contacts{% endif %}
+            {% if state.running %}Searching...{% else %}Find contacts{% endif %}
           </button>
           {% if notify_status != 'off' %}
             <button class="btn btn-ghost" type="submit" formaction="/test-notify">Test alert</button>
@@ -995,7 +998,7 @@ CONTACTS_PAGE = """
   {% if state.running %}
     <div class="banner">
       <span class="pulse"></span>
-      <span>Searching for <b>{{ state.target }}</b>{% if state.country %} in <b>{{ countries[state.country][0] }}</b>{% endif %} — this page refreshes every 3 seconds.</span>
+      <span>Searching for <b>{{ state.target }}</b>{% if state.country %} in <b>{{ countries[state.country][0] }}</b>{% endif %} - this page refreshes every 3 seconds.</span>
     </div>
   {% endif %}
 
@@ -1019,7 +1022,7 @@ CONTACTS_PAGE = """
         </div>
         <div>
           <label class="fieldlabel" for="q">Search all columns</label>
-          <input type="text" id="q" name="q" value="{{ q }}" placeholder="name, note, email, date…">
+          <input type="text" id="q" name="q" value="{{ q }}" placeholder="name, note, email, date...">
         </div>
         <div style="align-self:flex-end; display:flex; gap:8px; align-items:center;">
           <button class="btn" type="submit">Search</button>
@@ -1031,7 +1034,7 @@ CONTACTS_PAGE = """
 
   <div class="sectionhead">
     <h2>Contacts</h2>
-    <span class="counts">showing {{ rows|length }} of {{ total }} · newest first</span>
+    <span class="counts">showing {{ rows|length }} of {{ total }} &middot; newest first</span>
     {% if contacted_count %}<span class="chip">{{ contacted_count }} contacted</span>{% endif %}
   </div>
 
@@ -1072,7 +1075,7 @@ CONTACTS_PAGE = """
                   <input type="hidden" name="field" value="comment">
                   <input type="hidden" name="company" value="{{ company }}">
                   <input type="hidden" name="q" value="{{ q }}">
-                  <textarea class="cellin" name="value" rows="2" placeholder="Add a note…"
+                  <textarea class="cellin" name="value" rows="2" placeholder="Add a note..."
                             onblur="if(this.defaultValue!==this.value){this.form.submit();}">{{ value }}</textarea>
                 </form>
               </td>
@@ -1082,7 +1085,7 @@ CONTACTS_PAGE = """
                   <input type="hidden" name="field" value="{{ f }}">
                   <input type="hidden" name="company" value="{{ company }}">
                   <input type="hidden" name="q" value="{{ q }}">
-                  <input class="cellin" type="text" name="value" value="{{ value }}" placeholder="—"
+                  <input class="cellin" type="text" name="value" value="{{ value }}" placeholder="-"
                          onblur="if(this.defaultValue!==this.value){this.form.submit();}">
                 </form>
                 {% if f == 'email' and value %}
@@ -1139,7 +1142,7 @@ NEWS_PAGE = """
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Hire2o — AI News</title>
+  <title>Hire2o - AI News</title>
   {% if state.running %}<meta http-equiv="refresh" content="4">
   {% elif cooldown_left %}<meta http-equiv="refresh" content="20">{% endif %}
 """ + STYLE + """
@@ -1154,7 +1157,7 @@ NEWS_PAGE = """
         <div style="display:flex; gap:9px; align-items:center;">
           <button class="btn btn-primary" type="submit"
                   {% if state.running or cooldown_left %}disabled{% endif %}>
-            {% if state.running %}Fetching…
+            {% if state.running %}Fetching...
             {% elif cooldown_left %}Wait {{ (cooldown_left // 60) }}:{{ '%02d' % (cooldown_left % 60) }}
             {% else %}Refresh news{% endif %}
           </button>
@@ -1163,8 +1166,8 @@ NEWS_PAGE = """
           {% endif %}
         </div>
         <div class="counts">
-          Auto-runs daily at <b>{{ news_time }}</b> · {{ total_items }} stories in {{ groups|length }} sections
-          {% if state.last_run %} · last run {{ state.last_run }}{% endif %}
+          Auto-runs daily at <b>{{ news_time }}</b> &middot; {{ total_items }} stories in {{ groups|length }} sections
+          {% if state.last_run %} &middot; last run {{ state.last_run }}{% endif %}
         </div>
       </div>
     </form>
@@ -1173,7 +1176,7 @@ NEWS_PAGE = """
   {% if state.running %}
     <div class="banner">
       <span class="pulse"></span>
-      <span>Fetching, summarising and sorting the latest AI news — this page refreshes every 4 seconds.</span>
+      <span>Fetching, summarising and sorting the latest AI news - this page refreshes every 4 seconds.</span>
     </div>
   {% endif %}
 
@@ -1215,7 +1218,7 @@ NEWS_PAGE = """
                 <div class="cardactions">
                   {% if item.news_id in saved_ids %}
                     <form class="inline" method="post" action="/news/unsave/{{ item.news_id }}">
-                      <button class="btn btn-sm btn-star" type="submit">&#9733; Saved — remove</button>
+                      <button class="btn btn-sm btn-star" type="submit">&#9733; Saved - remove</button>
                     </form>
                   {% else %}
                     <form class="inline" method="post" action="/news/save/{{ item.news_id }}">
@@ -1293,7 +1296,7 @@ CRM_PAGE = """
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Hire2o — CRM</title>
+  <title>Hire2o - CRM</title>
   {% if state.running %}<meta http-equiv="refresh" content="4">{% endif %}
 """ + STYLE + """
 </head>
@@ -1350,7 +1353,7 @@ CRM_PAGE = """
         <form method="post" action="/crm/analyze" style="display:flex; align-items:center; gap:10px;">
           <input type="hidden" name="sheet" value="{{ sheet }}">
           <button class="btn btn-sm btn-primary" type="submit" {% if state.running %}disabled{% endif %}>
-            {% if state.running %}Analysing…{% else %}&#10024; Analyse activity{% endif %}
+            {% if state.running %}Analysing...{% else %}&#10024; Analyse activity{% endif %}
           </button>
           <span>
             {% if state.last_run %}Last run {{ state.last_run }}
@@ -1364,7 +1367,7 @@ CRM_PAGE = """
     <div class="actionbox box-stale">
       <div class="boxhead">
         <span class="icon">&#128228;</span>
-        <h2>Reconnect — quiet {{ boxes.stale_days }}+ days</h2>
+        <h2>Reconnect - quiet {{ boxes.stale_days }}+ days</h2>
         <span class="n">{{ boxes.stale|length }}</span>
       </div>
       {% if boxes.stale %}
@@ -1380,7 +1383,7 @@ CRM_PAGE = """
                   <span class="pill pill-cold">never</span>
                 {% endif %}
               </div>
-                      <div class="when">
+              <div class="when">
                 {% if s.last_raw %}
                   Last activity {{ s.last_raw }}
                   {% if s.last_line %}<br><span style="opacity:.75;">{{ s.last_line[:90] }}</span>{% endif %}
@@ -1388,17 +1391,20 @@ CRM_PAGE = """
                   No dated activity found
                 {% endif %}
               </div>
+            </div>
+          {% endfor %}
+        </div>
       {% else %}
         <div class="boxempty">
           Everyone contacted within {{ boxes.stale_days }} days.<br>
-          {% if not boxes.cols.last %}
-            <span style="font-size:12px;">No last-contact column found in this sheet.</span>
+          {% if not boxes.cols.activity and not boxes.cols.last %}
+            <span style="font-size:12px;">No activity or last-contact column found in this sheet.</span>
           {% endif %}
         </div>
       {% endif %}
-        <div class="boxnote">
-        Names from <b>{{ boxes.cols.name or '—' }}</b> · dates read from
-        <b>{{ boxes.cols.activity or boxes.cols.last or '—' }}</b>
+      <div class="boxnote">
+        Names from <b>{{ boxes.cols.name or '-' }}</b> &middot; dates read from
+        <b>{{ boxes.cols.activity or boxes.cols.last or '-' }}</b>
       </div>
     </div>
 
@@ -1407,7 +1413,7 @@ CRM_PAGE = """
   {% if state.running %}
     <div class="banner">
       <span class="pulse"></span>
-      <span>Reading activity notes and working out next steps — this page refreshes every 4 seconds.</span>
+      <span>Reading activity notes and working out next steps - this page refreshes every 4 seconds.</span>
     </div>
   {% endif %}
 
@@ -1433,7 +1439,7 @@ CRM_PAGE = """
         </div>
         <div>
           <label class="fieldlabel" for="q">Search all columns</label>
-          <input type="text" id="q" name="q" value="{{ q }}" placeholder="name, company, stage…">
+          <input type="text" id="q" name="q" value="{{ q }}" placeholder="name, company, stage...">
         </div>
         <div style="align-self:flex-end; display:flex; gap:8px; align-items:center;">
           <button class="btn" type="submit">Search</button>
@@ -1472,7 +1478,7 @@ CRM_PAGE = """
               {% for col_num, h in columns %}
                 <td class="{% if wide_col and wide_col == h.lower() %}wide4{% endif %}">
                   {% if wide_col and wide_col == h.lower() %}
-                    <textarea form="addform" name="col_{{ col_num }}" rows="3" placeholder="{{ h }}…"></textarea>
+                    <textarea form="addform" name="col_{{ col_num }}" rows="3" placeholder="{{ h }}..."></textarea>
                   {% else %}
                     <input form="addform" type="text" name="col_{{ col_num }}" placeholder="{{ h }}">
                   {% endif %}
@@ -1500,7 +1506,7 @@ CRM_PAGE = """
                       <input type="hidden" name="q" value="{{ q }}">
                       <textarea class="cellin autogrow" name="value"
                                 rows="{{ value | rows_for }}"
-                                placeholder="Add activity…"
+                                placeholder="Add activity..."
                                 oninput="autogrow(this)"
                                 onblur="if(this.defaultValue!==this.value){this.form.submit();}">{{ value }}</textarea>
                     </form>
@@ -1525,7 +1531,7 @@ CRM_PAGE = """
     </div>
 
     <p class="muted" style="font-size:12.5px; margin-top:14px;">
-      <b>{{ workbook }}</b> → sheet <b>{{ sheet }}</b>.
+      <b>{{ workbook }}</b> &rarr; sheet <b>{{ sheet }}</b>.
       The <b>{{ wide_col }}</b> column saves when you click away from it.
       Keep the file closed in Excel while using this page.
     </p>
@@ -1534,7 +1540,7 @@ CRM_PAGE = """
     <div class="panel empty">
       <div class="big">&#128202;</div>
       <p>
-        No worksheet named <b>{{ sheet }}</b> found in {{ workbook }} — or it has no header row.<br>
+        No worksheet named <b>{{ sheet }}</b> found in {{ workbook }} - or it has no header row.<br>
         Add column names in row 1, save and close Excel, then reload.
       </p>
     </div>
@@ -1558,3 +1564,4 @@ CRM_PAGE = """
 
 if __name__ == "__main__":
     app.run(port=5000, debug=True, use_reloader=False)
+
