@@ -698,8 +698,8 @@ STYLE = """
       text-align:left; padding: 11px 12px; white-space: nowrap;
       border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5;
     }
-    tbody td { padding: 9px 12px; vertical-align: top; border-bottom: 1px solid var(--line-soft); }
-    tbody tr:hover { background: #fbfcfd; }
+    tbody td { padding: 9px 12px; vertical-align: top; border-bottom: 1px solid var(--line-soft); height: 1px; }
+            tbody tr:hover { background: #fbfcfd; }
     tbody tr:last-child td { border-bottom: none; }
 
     tr.done { background: var(--green-soft); }
@@ -718,9 +718,10 @@ STYLE = """
     th.wide4 { min-width: 620px; }
     td.wide4 {
       min-width: 620px; max-width: 760px;
-      white-space: pre-wrap; word-break: break-word; line-height: 1.55;
+      white-space: normal; word-break: break-word; line-height: 1.55;
+      vertical-align: top;
     }
-    td.wide4 textarea.cellin { overflow: hidden; }
+    td.wide4 textarea.cellin { overflow: hidden; min-height: 0; }
 
     .badge {
       display:inline-block; font-size: 11px; font-weight: 600;
@@ -741,8 +742,7 @@ STYLE = """
       border-color: var(--accent); background:#fff; outline:none; box-shadow: 0 0 0 3px var(--accent-soft);
     }
     .cellin::placeholder { color: #c3ccd6; }
-    textarea.cellin { resize: vertical; min-height: 40px; font-size: 12.5px; line-height:1.45; }
-    td.editable { min-width: 155px; }
+    textarea.cellin { resize: vertical; font-size: 12.5px; line-height:1.45; display: block; }    td.editable { min-width: 155px; }
     td.commentcell { min-width: 225px; max-width: 270px; }
 
     /* ---------------------------------------------------- news */
