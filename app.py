@@ -1,6 +1,7 @@
 """The web app. Run this, then open http://localhost:5000 in your browser."""
 
 import os
+import math
 import time
 import threading
 from datetime import datetime, date, timedelta
@@ -9,6 +10,7 @@ from urllib.parse import urlparse
 from flask import Flask, request, redirect, url_for, render_template_string
 
 import contact_agent
+import crm
 import news
 import notify
 import store
@@ -17,13 +19,15 @@ app = Flask(__name__)
 
 state = {"running": False, "target": "", "country": "", "log": []}
 news_state = {"running": False, "log": [], "last_run": "", "last_run_ts": 0.0}
+crm_state = {"running": False, "log": [], "last_run": "", "sheet": ""}
 
 NO_COMPANY = "__blank__"
 NEWS_TIME = os.getenv("NEWS_TIME", "07:00")                 # daily auto-run, 24h clock
 NEWS_COOLDOWN = int(os.getenv("NEWS_COOLDOWN", "300"))      # seconds between manual refreshes
 CRM_SHEET = os.getenv("CRM_SHEET", "Sales")                 # default worksheet for the CRM tab
 CRM_STALE_DAYS = int(os.getenv("CRM_STALE_DAYS", "30"))     # "needs reconnecting" threshold
-CRM_WIDE_COL = os.getenv("CRM_WIDE_COL", "activity")        # column rendered 4x wider + editable
+CRM_WIDE_COL = os.getenv("CRM_WIDE_COL", "activity")        # wide, editable column
+CRM_ACTIVITY_COL = os.getenv("CRM_ACTIVITY_COL", "")        # blank = use CRM_WIDE_COL
 CRM_MAX_COLS = int(os.getenv("CRM_MAX_COLS", "6"))          # hide columns 7 onwards
 
 
@@ -37,7 +41,16 @@ def domain_of(url):
         return url
 
 
+def textarea_rows(text, width=95, min_rows=2, max_rows=24):
+    """How many lines this content needs, so the row is exactly tall enough."""
+    lines = 0
+    for para in (text or "").split("\n"):
+        lines += max(1, math.ceil(len(para) / width))
+    return max(min_rows, min(max_rows, lines))
+
+
 app.jinja_env.filters["domain"] = domain_of
+app.jinja_env.filters["rows_for"] = textarea_rows
 
 
 def company_list(rows):
@@ -99,26 +112,35 @@ def parse_any_date(text):
     return None
 
 
-def find_col(headers, hints, override=""):
-    """Locate a column by exact override first, then by name hint."""
+def find_col(headers, hints, override="", exclude=()):
+    """Locate a column: exact override, then exact hint, then prefix, then contains."""
+    pool = [h for h in headers if h not in exclude]
+
     if override:
-        for h in headers:
+        for h in pool:
             if h.strip().lower() == override.strip().lower():
                 return h
-    for hint in hints:
-        for h in headers:
-            if hint in h.strip().lower():
-                return h
+
+    low = [(h, h.strip().lower()) for h in pool]
+    for test in (lambda hl, hint: hl == hint,
+                 lambda hl, hint: hl.startswith(hint),
+                 lambda hl, hint: hint in hl):
+        for hint in hints:
+            for h, hl in low:
+                if test(hl, hint):
+                    return h
     return ""
 
 
 def crm_boxes(headers, rows):
     """Build the two summary panels shown above the CRM table."""
-    name_col = find_col(headers, NAME_HINTS, os.getenv("CRM_NAME_COL", ""))
     company_col = find_col(headers, COMPANY_HINTS, os.getenv("CRM_COMPANY_COL", ""))
+    name_col = find_col(headers, NAME_HINTS, os.getenv("CRM_NAME_COL", ""),
+                        exclude=(company_col,))
     followup_col = find_col(headers, FOLLOWUP_HINTS, os.getenv("CRM_FOLLOWUP_COL", ""))
     due_col = find_col(headers, DUE_HINTS, os.getenv("CRM_DUE_COL", ""))
     last_col = find_col(headers, LASTCONTACT_HINTS, os.getenv("CRM_LASTCONTACT_COL", ""))
+    activity_col = find_col(headers, (CRM_WIDE_COL,), CRM_ACTIVITY_COL)
 
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     cutoff = today - timedelta(days=CRM_STALE_DAYS)
@@ -128,7 +150,7 @@ def crm_boxes(headers, rows):
         org = (row.get(company_col, "") if company_col else "").strip()
         return (who or "(no name)"), org
 
-    # ---- box 1: calls and follow-ups outstanding
+    # ---- box 1 fallback: calls and follow-ups from columns
     followups = []
     for row in rows:
         task = (row.get(followup_col, "") if followup_col else "").strip()
@@ -148,7 +170,6 @@ def crm_boxes(headers, rows):
             "days_over": days,
         })
 
-    # overdue first (most overdue at the top), then dated, then undated
     followups.sort(key=lambda f: (f["due"] is None, f["due"] or today))
 
     # ---- box 2: gone quiet for more than CRM_STALE_DAYS
@@ -168,7 +189,6 @@ def crm_boxes(headers, rows):
             "days": (today - last).days if last else None,
         })
 
-    # longest silence first, never-contacted last
     stale.sort(key=lambda s: (s["last"] is None, s["last"] or today))
 
     return {
@@ -178,6 +198,7 @@ def crm_boxes(headers, rows):
         "cols": {
             "name": name_col, "company": company_col,
             "followup": followup_col, "due": due_col, "last": last_col,
+            "activity": activity_col,
         },
     }
 
@@ -192,6 +213,11 @@ def log(message):
 def news_log(message):
     print(message)
     news_state["log"].append(message)
+
+
+def crm_log(message):
+    print(message)
+    crm_state["log"].append(message)
 
 
 def worker(target, country_code):
@@ -218,6 +244,18 @@ def news_worker(push=True):
         news_log(f"ERROR: {e}")
     finally:
         news_state["running"] = False
+
+
+def crm_worker(sheet):
+    try:
+        headers, rows = store.read_sheet_auto(sheet)
+        cols = crm_boxes(headers, rows)["cols"]
+        crm.analyze(sheet, rows, cols, log=crm_log)
+        crm_state["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    except Exception as e:
+        crm_log(f"ERROR: {e}")
+    finally:
+        crm_state["running"] = False
 
 
 def news_cooldown_left():
@@ -311,14 +349,14 @@ def crm_page():
     headers, all_rows = store.read_sheet_auto(sheet)
     total = len(all_rows)
 
-    boxes = crm_boxes(headers, all_rows)      # always from the FULL sheet
+    boxes = crm_boxes(headers, all_rows)
+    suggestions = crm.merge(all_rows, boxes["cols"], sheet)
 
-    # column numbers are 1-based and match Excel
     all_cols = [(i + 1, h) for i, h in enumerate(headers)]
     columns = all_cols[:CRM_MAX_COLS]
-    wide = CRM_WIDE_COL.strip().lower()
-    for col in all_cols[CRM_MAX_COLS:]:       # keep the wide column even if further right
-        if wide and wide in col[1].lower():
+    wide = (boxes["cols"]["activity"] or CRM_WIDE_COL).strip().lower()
+    for col in all_cols[CRM_MAX_COLS:]:
+        if wide and wide == col[1].strip().lower():
             columns.append(col)
 
     rows = all_rows
@@ -339,12 +377,25 @@ def crm_page():
         q=q,
         adding=adding,
         boxes=boxes,
+        suggestions=suggestions,
         wide_col=wide,
         workbook=store.XLSX_FILE,
         has_logo=logo_exists(),
         notify_status=notify.status_line(),
         tab="crm",
+        state=crm_state,
     )
+
+
+@app.route("/crm/analyze", methods=["POST"])
+def crm_analyze():
+    sheet = request.form.get("sheet", "")
+    if sheet and not crm_state["running"]:
+        crm_state["running"] = True
+        crm_state["sheet"] = sheet
+        crm_state["log"] = []
+        threading.Thread(target=crm_worker, args=(sheet,), daemon=True).start()
+    return redirect(url_for("crm_page", sheet=sheet))
 
 
 @app.route("/crm/edit", methods=["POST"])
@@ -669,6 +720,7 @@ STYLE = """
       min-width: 620px; max-width: 760px;
       white-space: pre-wrap; word-break: break-word; line-height: 1.55;
     }
+    td.wide4 textarea.cellin { overflow: hidden; }
 
     .badge {
       display:inline-block; font-size: 11px; font-weight: 600;
@@ -803,14 +855,14 @@ STYLE = """
     .box-stale .boxhead { background: linear-gradient(180deg, #f2f8ff 0%, #fff 100%); }
     .box-stale .boxhead .n { background: var(--accent-soft); color: var(--accent-dark); }
 
-    .boxscroll { max-height: 290px; overflow-y: auto; padding: 4px 18px 14px; }
+    .boxscroll { max-height: 320px; overflow-y: auto; padding: 4px 18px 14px; }
     .boxscroll::-webkit-scrollbar { width: 7px; }
     .boxscroll::-webkit-scrollbar-thumb { background: #d2dae3; border-radius: 4px; }
 
     .boxitem { padding: 11px 0; border-bottom: 1px solid var(--line-soft); }
     .boxitem:last-child { border-bottom:none; }
-    .boxitem .who { font-weight: 600; font-size: 13.5px; color: var(--brand); }
-    .boxitem .org { font-size: 12.5px; color: var(--ink-faint); margin-left: 6px; }
+    .boxitem .who, .sugg .who { font-weight: 600; font-size: 13.5px; color: var(--brand); }
+    .boxitem .org, .sugg .org { font-size: 12.5px; color: var(--ink-faint); margin-left: 4px; }
     .boxitem .what { font-size: 13px; color: #3a4658; margin-top: 3px; line-height:1.45; }
     .boxitem .when { font-size: 11.5px; color: var(--ink-faint); margin-top: 4px; }
 
@@ -821,9 +873,24 @@ STYLE = """
     .pill-over { background: var(--red-soft); color: var(--red); }
     .pill-soon { background: var(--amber-soft); color: var(--amber); }
     .pill-cold { background: #eef1f5; color: var(--ink-soft); }
+    .pill-high { background: var(--red-soft); color: var(--red); }
+    .pill-medium { background: var(--amber-soft); color: var(--amber); }
+    .pill-low { background: var(--line-soft); color: var(--ink-faint); }
+    .pill-stale { background:#f3e8ff; color:#7e22ce; }
 
     .boxempty { padding: 26px 18px; text-align:center; color: var(--ink-faint); font-size: 13px; }
     .boxnote { font-size: 11.5px; color: var(--ink-faint); padding: 10px 18px; border-top: 1px solid var(--line-soft); }
+
+    .sugg { padding: 12px 0; border-bottom: 1px solid var(--line-soft); }
+    .sugg:last-child { border-bottom:none; }
+    .sugg .action {
+      font-size: 13.5px; color: var(--ink); margin-top: 4px; line-height:1.5;
+      padding-left: 10px; border-left: 3px solid var(--line);
+    }
+    .sugg.p-high .action { border-left-color: var(--red); }
+    .sugg.p-medium .action { border-left-color: var(--amber); }
+    .sugg.p-low .action { border-left-color: var(--line); }
+    .timing { font-size: 11.5px; color: var(--ink-faint); margin-top: 4px; padding-left: 13px; }
 
     /* ---------------------------------------------------- CRM add row */
     .addrow { background: var(--accent-soft); }
@@ -1213,6 +1280,7 @@ CRM_PAGE = """
 <head>
   <meta charset="utf-8">
   <title>Hire2o — CRM</title>
+  {% if state.running %}<meta http-equiv="refresh" content="4">{% endif %}
 """ + STYLE + """
 </head>
 <body>
@@ -1224,21 +1292,33 @@ CRM_PAGE = """
     <div class="actionbox box-calls">
       <div class="boxhead">
         <span class="icon">&#128222;</span>
-        <h2>Calls &amp; follow-ups</h2>
-        <span class="n">{{ boxes.followups|length }}</span>
+        <h2>Suggested next actions</h2>
+        <span class="n">{{ suggestions|length }}</span>
       </div>
-      {% if boxes.followups %}
+
+      {% if suggestions %}
+        <div class="boxscroll">
+          {% for s in suggestions %}
+            <div class="sugg p-{{ s.priority }}">
+              <div>
+                <span class="who">{{ s.who }}</span>
+                {% if s.org %}<span class="org">&middot; {{ s.org }}</span>{% endif %}
+                <span class="pill pill-{{ s.priority }}">{{ s.priority }}</span>
+                {% if s.stale %}<span class="pill pill-stale">notes changed</span>{% endif %}
+              </div>
+              <div class="action">{{ s.action }}</div>
+              {% if s.timing %}<div class="timing">&#8986; {{ s.timing }}</div>{% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      {% elif boxes.followups %}
         <div class="boxscroll">
           {% for f in boxes.followups %}
             <div class="boxitem">
               <div>
                 <span class="who">{{ f.who }}</span>
                 {% if f.org %}<span class="org">&middot; {{ f.org }}</span>{% endif %}
-                {% if f.overdue %}
-                  <span class="pill pill-over">{{ f.days_over }}d overdue</span>
-                {% elif f.due %}
-                  <span class="pill pill-soon">due</span>
-                {% endif %}
+                {% if f.overdue %}<span class="pill pill-over">{{ f.days_over }}d overdue</span>{% endif %}
               </div>
               <div class="what">{{ f.task }}</div>
               {% if f.due_raw %}<div class="when">Due {{ f.due_raw }}</div>{% endif %}
@@ -1247,19 +1327,24 @@ CRM_PAGE = """
         </div>
       {% else %}
         <div class="boxempty">
-          Nothing outstanding.<br>
-          {% if not boxes.cols.followup and not boxes.cols.due %}
-            <span style="font-size:12px;">No follow-up column found in this sheet.</span>
-          {% endif %}
+          Nothing yet.<br>
+          <span style="font-size:12px;">Press <b>Analyse activity</b> to read the notes and suggest next steps.</span>
         </div>
       {% endif %}
-      {% if boxes.cols.followup or boxes.cols.due %}
-        <div class="boxnote">
-          Reading
-          {% if boxes.cols.followup %}<b>{{ boxes.cols.followup }}</b>{% endif %}
-          {% if boxes.cols.due %}{% if boxes.cols.followup %} and {% endif %}<b>{{ boxes.cols.due }}</b>{% endif %}
-        </div>
-      {% endif %}
+
+      <div class="boxnote">
+        <form method="post" action="/crm/analyze" style="display:flex; align-items:center; gap:10px;">
+          <input type="hidden" name="sheet" value="{{ sheet }}">
+          <button class="btn btn-sm btn-primary" type="submit" {% if state.running %}disabled{% endif %}>
+            {% if state.running %}Analysing…{% else %}&#10024; Analyse activity{% endif %}
+          </button>
+          <span>
+            {% if state.last_run %}Last run {{ state.last_run }}
+            {% elif boxes.cols.activity %}Reads <b>{{ boxes.cols.activity }}</b>
+            {% else %}No activity column found{% endif %}
+          </span>
+        </form>
+      </div>
     </div>
 
     <div class="actionbox box-stale">
@@ -1295,12 +1380,25 @@ CRM_PAGE = """
           {% endif %}
         </div>
       {% endif %}
-      {% if boxes.cols.last %}
-        <div class="boxnote">Reading <b>{{ boxes.cols.last }}</b></div>
-      {% endif %}
+      <div class="boxnote">
+        Names from <b>{{ boxes.cols.name or '—' }}</b>
+        {% if boxes.cols.last %} · dates from <b>{{ boxes.cols.last }}</b>{% endif %}
+      </div>
     </div>
 
   </div>
+
+  {% if state.running %}
+    <div class="banner">
+      <span class="pulse"></span>
+      <span>Reading activity notes and working out next steps — this page refreshes every 4 seconds.</span>
+    </div>
+  {% endif %}
+
+  {% if state.log %}
+    <div class="log" style="height:120px;">{% for line in state.log %}{{ line }}
+{% endfor %}</div>
+  {% endif %}
 
   <div class="panel panel-pad" style="margin-top:20px;">
     <form method="get" action="/crm">
@@ -1344,7 +1442,7 @@ CRM_PAGE = """
         <thead>
           <tr>
             {% for col_num, h in columns %}
-              <th class="{% if wide_col and wide_col in h.lower() %}wide4{% endif %}">{{ h }}</th>
+              <th class="{% if wide_col and wide_col == h.lower() %}wide4{% endif %}">{{ h }}</th>
             {% endfor %}
           </tr>
         </thead>
@@ -1356,10 +1454,9 @@ CRM_PAGE = """
                 <input type="hidden" name="sheet" value="{{ sheet }}">
               </form>
               {% for col_num, h in columns %}
-                <td class="{% if wide_col and wide_col in h.lower() %}wide4{% endif %}">
-                  {% if wide_col and wide_col in h.lower() %}
-                    <textarea form="addform" name="col_{{ col_num }}" rows="3"
-                              placeholder="{{ h }}…"></textarea>
+                <td class="{% if wide_col and wide_col == h.lower() %}wide4{% endif %}">
+                  {% if wide_col and wide_col == h.lower() %}
+                    <textarea form="addform" name="col_{{ col_num }}" rows="3" placeholder="{{ h }}…"></textarea>
                   {% else %}
                     <input form="addform" type="text" name="col_{{ col_num }}" placeholder="{{ h }}">
                   {% endif %}
@@ -1378,15 +1475,17 @@ CRM_PAGE = """
             <tr>
               {% for col_num, h in columns %}
                 {% set value = row.get(h, '') %}
-                {% if wide_col and wide_col in h.lower() %}
+                {% if wide_col and wide_col == h.lower() %}
                   <td class="wide4">
                     <form class="cellform" method="post" action="/crm/edit">
                       <input type="hidden" name="sheet" value="{{ sheet }}">
                       <input type="hidden" name="row" value="{{ row._row }}">
                       <input type="hidden" name="col" value="{{ col_num }}">
                       <input type="hidden" name="q" value="{{ q }}">
-                      <textarea class="cellin" name="value" rows="3"
+                      <textarea class="cellin autogrow" name="value"
+                                rows="{{ value | rows_for }}"
                                 placeholder="Add activity…"
+                                oninput="autogrow(this)"
                                 onblur="if(this.defaultValue!==this.value){this.form.submit();}">{{ value }}</textarea>
                     </form>
                   </td>
@@ -1424,6 +1523,16 @@ CRM_PAGE = """
       </p>
     </div>
   {% endif %}
+
+  <script>
+    function autogrow(el) {
+      el.style.height = 'auto';
+      el.style.height = (el.scrollHeight + 2) + 'px';
+    }
+    document.addEventListener('DOMContentLoaded', function () {
+      document.querySelectorAll('textarea.autogrow').forEach(autogrow);
+    });
+  </script>
 
 </div>
 </body>
