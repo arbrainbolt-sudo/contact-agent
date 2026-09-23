@@ -27,7 +27,6 @@ DISPLAY_FIELDS = ["comment", "search_date", "target", "country", "name", "role",
                   "company", "email", "phone", "linkedin", "confidence", "notes",
                   "source_url", "found_at"]
 
-# Columns you are allowed to edit by hand in the browser.
 EDITABLE_FIELDS = {"phone", "comment", "email", "name", "role", "company"}
 
 MAX_PAGES = 12
@@ -37,7 +36,6 @@ _lock = threading.Lock()
 
 
 # ---------------------------------------------------------------- countries
-# Each entry is  code -> (display name, DuckDuckGo region code)
 
 COUNTRIES = {
     "":   ("Worldwide (no country filter)", "wt-wt"),
@@ -79,7 +77,6 @@ def country_region(code):
 # ---------------------------------------------------------------- links
 
 def normalize_linkedin(value):
-    """Turn 'linkedin.com/in/someone?trk=xyz' into 'https://linkedin.com/in/someone'."""
     v = (value or "").strip()
     if "linkedin.com/in/" not in v.lower():
         return ""
@@ -103,7 +100,6 @@ def clear_all():
 
 
 def _migrate(rows):
-    """Bring older rows up to the current column set."""
     changed = False
     for r in rows:
         if not r.get("row_id"):
@@ -116,7 +112,6 @@ def _migrate(rows):
             if r.get(col) is None:
                 r[col] = ""
                 changed = True
-        # older rows have no search_date — derive it from found_at
         if not r.get("search_date"):
             r["search_date"] = (r.get("found_at") or "")[:10]
             changed = True
@@ -168,7 +163,6 @@ def toggle_contacted(row_id):
 
 
 def update_field(row_id, field, value):
-    """Hand-edit one cell. Returns True if the row was found and changed."""
     if field not in EDITABLE_FIELDS:
         return False
     with _lock:
@@ -221,11 +215,9 @@ def ask_llm(prompt, retries=2):
         message = data["choices"][0].get("message") or {}
         content = message.get("content")
 
-        # Some reasoning models leave content null and put the answer here instead.
         if not content:
             content = message.get("reasoning")
 
-        # Some models return content as a list of blocks rather than a string.
         if isinstance(content, list):
             content = " ".join(b.get("text", "") for b in content if isinstance(b, dict))
 
@@ -244,7 +236,6 @@ def parse_json(raw, fallback):
         return fallback
     text = raw.strip()
     text = text.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    # some models wrap JSON in prose — grab the outermost brackets
     for opener, closer in (("{", "}"), ("[", "]")):
         if opener in text and closer in text:
             start, end = text.find(opener), text.rfind(closer)
@@ -304,7 +295,6 @@ def fetch_page(url, max_chars=7000):
 
 
 def ddg_search(query, region, max_results=5, log=print):
-    """Search, preferring results from the chosen country."""
     try:
         return list(DDGS().text(query, region=region, max_results=max_results))
     except TypeError:
@@ -405,7 +395,6 @@ OTHER_COUNTRY_WORDS = {name.lower() for _, (name, _) in COUNTRIES.items()} - {"w
 
 
 def _text(person, key):
-    """Read a field as a string, whatever nonsense the model put there."""
     v = person.get(key)
     return v.strip() if isinstance(v, str) else ""
 
@@ -440,4 +429,97 @@ def validate(person, page_text, place):
 
     if not person["name"]:
         return None
-    if not (person["email"]
+    if not (person["email"] or person["phone"] or person["linkedin"]):
+        return None
+    return person
+
+
+# ---------------------------------------------------------------- the run
+
+def run_agent(target, country_code="", log=print):
+    place = country_name(country_code) if country_code else ""
+    region = country_region(country_code)
+    search_date = datetime.now().strftime("%Y-%m-%d")
+
+    log(f"Planning searches for: {target}")
+    log(f"Country filter: {place or 'none (worldwide)'}  [region {region}]")
+
+    queries = plan_queries(target, place)
+    for q in queries:
+        log(f"   plan: {q}")
+
+    existing = read_rows()
+    seen_urls = {r["source_url"] for r in existing if r["target"] == target}
+    seen_people = {(r["name"].strip().lower(), r["email"].strip().lower()) for r in existing}
+
+    findings = []
+    pages_read = 0
+    dropped_location = 0
+
+    for q in queries:
+        if pages_read >= MAX_PAGES:
+            break
+        log(f"Searching: {q}")
+        hits = ddg_search(q, region, max_results=5, log=log)
+
+        for hit in hits:
+            if pages_read >= MAX_PAGES:
+                log("   page limit reached, stopping")
+                break
+
+            url = (hit.get("href") or "").strip()
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+
+            if "linkedin.com/in/" in url:
+                text = f"{hit.get('title', '')} {hit.get('body', '')} {url}"
+                log(f"   linkedin result: {url}")
+            else:
+                log(f"   reading {url}")
+                text = fetch_page(url)
+                if len(text) < 200:
+                    continue
+
+            hints = find_patterns(text)
+            pages_read += 1
+
+            for person in extract_people(target, url, text, hints, place):
+                if not isinstance(person, dict):
+                    continue
+                cleaned = validate(person, text, place)
+                if not cleaned:
+                    if person.get("name"):
+                        dropped_location += 1
+                    continue
+                person = cleaned
+
+                key = (person["name"].lower(), person["email"].lower())
+                if key in seen_people:
+                    continue
+                seen_people.add(key)
+
+                person["row_id"] = uuid.uuid4().hex[:12]
+                person["contacted"] = "no"
+                person["comment"] = ""
+                person["search_date"] = search_date
+                person["target"] = target
+                person["country"] = place
+                person["source_url"] = url
+                person["found_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                findings.append(person)
+                log(f"      {person['name']} — {person['email'] or person['phone'] or person['linkedin']}")
+
+            time.sleep(PAUSE_SECONDS)
+
+    findings.reverse()
+    append_rows(findings)
+
+    extra = f", {dropped_location} rejected" if dropped_location else ""
+    log(f"Finished. Read {pages_read} pages, saved {len(findings)} new people{extra}.")
+    return findings
+
+
+if __name__ == "__main__":
+    run_agent(input("Who are you looking for? "),
+              input("Country code (e.g. US, blank for all): ").strip().upper())
