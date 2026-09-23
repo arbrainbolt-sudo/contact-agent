@@ -1,5 +1,5 @@
 """Reads CRM activity notes and suggests the next action for each row."""
-
+import re
 import hashlib
 from datetime import datetime
 
@@ -12,7 +12,82 @@ SUGGESTION_FIELDS = ["sheet", "row", "who", "org", "activity_hash",
 PRIORITIES = ("high", "medium", "low")
 MAX_ROWS_PER_CALL = 25
 
+# ---------------------------------------------------------------- date parsing
 
+MONTHS = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9,
+    "oct": 10, "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+
+# a line that is nothing but a 4-digit year, e.g. "2026"
+YEAR_LINE_RE = re.compile(r"^\s*(19|20)\d{2}\s*$")
+
+# a 4-digit year anywhere, for lines like "--- 2025 ---"
+YEAR_ANY_RE = re.compile(r"\b((?:19|20)\d{2})\b")
+
+# "July 7", "Sep 12", "Aug 15th", "Dec 3," — month name then day
+MONTH_DAY_RE = re.compile(
+    r"^\s*[-•*>\s]*"                                  # optional bullet
+    r"([A-Za-z]{3,9})\.?\s+"                          # month name
+    r"(\d{1,2})(?:st|nd|rd|th)?"                      # day, optional ordinal
+    r"(?:\s*,?\s*((?:19|20)\d{2}))?",                 # optional inline year
+    re.IGNORECASE,
+)
+
+
+def last_activity_date(text, default_year=None):
+    """Find the most recent date in an activity note.
+
+    Understands a bare year on its own line followed by 'Month Day' entries,
+    and inline years like 'Sep 12, 2025'. Returns (datetime, raw_line) or
+    (None, "").
+    """
+    if not text:
+        return None, ""
+
+    year = default_year or datetime.now().year
+    best = None
+    best_line = ""
+
+    for raw_line in str(text).splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+
+        # a line that is just a year sets the context for the lines below it
+        if YEAR_LINE_RE.match(line):
+            year = int(line.strip())
+            continue
+
+        m = MONTH_DAY_RE.match(line)
+        if not m:
+            continue
+
+        month = MONTHS.get(m.group(1).lower())
+        if not month:
+            continue                       # e.g. "Meeting 7 - ..." — not a month
+
+        day = int(m.group(2))
+        this_year = int(m.group(3)) if m.group(3) else year
+
+        # a year elsewhere on the same line, e.g. "Sep 12 (2025) - call"
+        if not m.group(3):
+            tail = YEAR_ANY_RE.search(line[m.end():])
+            if tail:
+                this_year = int(tail.group(1))
+
+        try:
+            found = datetime(this_year, month, day)
+        except ValueError:
+            continue                       # e.g. Feb 30
+
+        if best is None or found > best:
+            best = found
+            best_line = line
+
+    return best, best_line
 def activity_hash(text):
     return hashlib.sha1((text or "").strip().encode("utf-8")).hexdigest()[:12]
 

@@ -173,19 +173,33 @@ def crm_boxes(headers, rows):
     followups.sort(key=lambda f: (f["due"] is None, f["due"] or today))
 
     # ---- box 2: gone quiet for more than CRM_STALE_DAYS
+    # ---- box 2: gone quiet for more than CRM_STALE_DAYS
+    # Dates come from the Activity notes first, falling back to a date column.
     stale = []
     for row in rows:
-        last_raw = (row.get(last_col, "") if last_col else "").strip()
-        last = parse_any_date(last_raw)
+        activity = (row.get(activity_col, "") if activity_col else "").strip()
+        last, last_line = crm.last_activity_date(activity)
+        source = "activity"
+
+        if not last:
+            last_raw = (row.get(last_col, "") if last_col else "").strip()
+            last = parse_any_date(last_raw)
+            last_line = last_raw
+            source = "column"
+
         if last and last >= cutoff:
             continue                       # contacted recently enough
+
         who, org = label(row)
         if who == "(no name)" and not org:
             continue
+
         stale.append({
             "who": who, "org": org,
-            "last_raw": last_raw,
+            "last_raw": last.strftime("%b %-d, %Y") if last else "",
+            "last_line": last_line,
             "last": last,
+            "source": source,
             "days": (today - last).days if last else None,
         })
 
@@ -1366,12 +1380,14 @@ CRM_PAGE = """
                   <span class="pill pill-cold">never</span>
                 {% endif %}
               </div>
-              <div class="when">
-                {% if s.last_raw %}Last contact {{ s.last_raw }}{% else %}No contact date recorded{% endif %}
+                      <div class="when">
+                {% if s.last_raw %}
+                  Last activity {{ s.last_raw }}
+                  {% if s.last_line %}<br><span style="opacity:.75;">{{ s.last_line[:90] }}</span>{% endif %}
+                {% else %}
+                  No dated activity found
+                {% endif %}
               </div>
-            </div>
-          {% endfor %}
-        </div>
       {% else %}
         <div class="boxempty">
           Everyone contacted within {{ boxes.stale_days }} days.<br>
@@ -1380,9 +1396,9 @@ CRM_PAGE = """
           {% endif %}
         </div>
       {% endif %}
-      <div class="boxnote">
-        Names from <b>{{ boxes.cols.name or '—' }}</b>
-        {% if boxes.cols.last %} · dates from <b>{{ boxes.cols.last }}</b>{% endif %}
+        <div class="boxnote">
+        Names from <b>{{ boxes.cols.name or '—' }}</b> · dates read from
+        <b>{{ boxes.cols.activity or boxes.cols.last or '—' }}</b>
       </div>
     </div>
 
