@@ -3,7 +3,7 @@
 import os
 import time
 import threading
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from urllib.parse import urlparse
 
 from flask import Flask, request, redirect, url_for, render_template_string
@@ -22,6 +22,8 @@ NO_COMPANY = "__blank__"
 NEWS_TIME = os.getenv("NEWS_TIME", "07:00")                 # daily auto-run, 24h clock
 NEWS_COOLDOWN = int(os.getenv("NEWS_COOLDOWN", "300"))      # seconds between manual refreshes
 CRM_SHEET = os.getenv("CRM_SHEET", "Sales")                 # default worksheet for the CRM tab
+CRM_STALE_DAYS = int(os.getenv("CRM_STALE_DAYS", "30"))     # "needs reconnecting" threshold
+CRM_WIDE_COL = os.getenv("CRM_WIDE_COL", "activity")        # column rendered 4x wider
 
 
 # ---------------------------------------------------------------- helpers
@@ -66,6 +68,121 @@ def logo_exists():
     return os.path.exists(os.path.join(app.static_folder, "logo.png"))
 
 
+# ---------------------------------------------------------------- CRM analysis
+
+# US-style month/day first, since that is the likely local convention.
+DATE_FORMATS = ("%Y-%m-%d %H:%M", "%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y",
+                "%d/%m/%Y", "%Y/%m/%d", "%d-%m-%Y", "%d-%b-%Y",
+                "%b %d, %Y", "%B %d, %Y", "%d %b %Y", "%d %B %Y")
+
+NAME_HINTS = ("name", "person", "contact")
+COMPANY_HINTS = ("company", "account", "organi", "client")
+FOLLOWUP_HINTS = ("follow", "next step", "next action", "action", "task", "to do", "todo", "call")
+DUE_HINTS = ("due", "next contact", "follow up date", "followup date", "next date", "reminder")
+LASTCONTACT_HINTS = ("last contact", "last contacted", "last touch", "last activity",
+                     "last call", "last meeting", "last spoke", "contacted on",
+                     "activity date", "last")
+
+
+def parse_any_date(text):
+    """Best-effort date parse from whatever the spreadsheet cell held."""
+    t = (text or "").strip()
+    if not t:
+        return None
+    for candidate in (t, t.split(" ")[0]):
+        for fmt in DATE_FORMATS:
+            try:
+                return datetime.strptime(candidate, fmt)
+            except ValueError:
+                continue
+    return None
+
+
+def find_col(headers, hints, override=""):
+    """Locate a column by exact override first, then by name hint."""
+    if override:
+        for h in headers:
+            if h.strip().lower() == override.strip().lower():
+                return h
+    for hint in hints:
+        for h in headers:
+            if hint in h.strip().lower():
+                return h
+    return ""
+
+
+def crm_boxes(headers, rows):
+    """Build the two summary panels shown above the CRM table."""
+    name_col = find_col(headers, NAME_HINTS, os.getenv("CRM_NAME_COL", ""))
+    company_col = find_col(headers, COMPANY_HINTS, os.getenv("CRM_COMPANY_COL", ""))
+    followup_col = find_col(headers, FOLLOWUP_HINTS, os.getenv("CRM_FOLLOWUP_COL", ""))
+    due_col = find_col(headers, DUE_HINTS, os.getenv("CRM_DUE_COL", ""))
+    last_col = find_col(headers, LASTCONTACT_HINTS, os.getenv("CRM_LASTCONTACT_COL", ""))
+
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    cutoff = today - timedelta(days=CRM_STALE_DAYS)
+
+    def label(row):
+        who = (row.get(name_col, "") if name_col else "").strip()
+        org = (row.get(company_col, "") if company_col else "").strip()
+        if who and org and who.lower() != org.lower():
+            return who, org
+        return (who or org or "(unnamed)"), ""
+
+    # ---- box 1: calls and follow-ups outstanding
+    followups = []
+    for row in rows:
+        task = (row.get(followup_col, "") if followup_col else "").strip()
+        due_raw = (row.get(due_col, "") if due_col else "").strip()
+        due = parse_any_date(due_raw)
+        if not task and not due:
+            continue
+        who, org = label(row)
+        overdue = bool(due and due < today)
+        days = (today - due).days if overdue else 0
+        followups.append({
+            "who": who, "org": org,
+            "task": task or "Follow up",
+            "due_raw": due_raw,
+            "due": due,
+            "overdue": overdue,
+            "days_over": days,
+        })
+
+    # overdue first (most overdue at the top), then dated, then undated
+    followups.sort(key=lambda f: (f["due"] is None, f["due"] or today))
+
+    # ---- box 2: gone quiet for more than CRM_STALE_DAYS
+    stale = []
+    for row in rows:
+        last_raw = (row.get(last_col, "") if last_col else "").strip()
+        last = parse_any_date(last_raw)
+        if last and last >= cutoff:
+            continue                       # contacted recently enough
+        who, org = label(row)
+        if who == "(unnamed)" and not org:
+            continue
+        stale.append({
+            "who": who, "org": org,
+            "last_raw": last_raw,
+            "last": last,
+            "days": (today - last).days if last else None,
+        })
+
+    # longest silence first, never-contacted last
+    stale.sort(key=lambda s: (s["last"] is None, s["last"] or today))
+
+    return {
+        "followups": followups,
+        "stale": stale,
+        "stale_days": CRM_STALE_DAYS,
+        "cols": {
+            "name": name_col, "company": company_col,
+            "followup": followup_col, "due": due_col, "last": last_col,
+        },
+    }
+
+
 # ---------------------------------------------------------------- workers
 
 def log(message):
@@ -105,7 +222,6 @@ def news_worker(push=True):
 
 
 def news_cooldown_left():
-    """Seconds remaining before a manual refresh is allowed again."""
     if not news_state["last_run_ts"]:
         return 0
     elapsed = time.time() - news_state["last_run_ts"]
@@ -192,9 +308,12 @@ def crm_page():
                                               else (sheets[0] if sheets else CRM_SHEET))
     q = request.args.get("q", "").strip()
 
-    headers, rows = store.read_sheet_auto(sheet)
-    total = len(rows)
+    headers, all_rows = store.read_sheet_auto(sheet)
+    total = len(all_rows)
 
+    boxes = crm_boxes(headers, all_rows)      # always from the FULL sheet
+
+    rows = all_rows
     if q:
         needle = q.lower()
         rows = [r for r in rows if any(needle in (v or "").lower() for v in r.values())]
@@ -207,6 +326,8 @@ def crm_page():
         rows=rows,
         total=total,
         q=q,
+        boxes=boxes,
+        wide_col=CRM_WIDE_COL.strip().lower(),
         workbook=store.XLSX_FILE,
         has_logo=logo_exists(),
         notify_status=notify.status_line(),
@@ -313,11 +434,11 @@ STYLE = """
        BRAND PALETTE — change these five lines to re-theme the app
        ============================================================ */
     :root {
-      --brand:        #0f2f5c;   /* primary navy — header, headings */
-      --brand-light:  #1c4a8a;   /* hover / lighter navy */
-      --accent:       #00a8a8;   /* teal — buttons, links, highlights */
-      --accent-dark:  #00807f;   /* teal hover */
-      --accent-soft:  #e4f6f6;   /* pale teal — backgrounds, chips */
+      --brand:        #0f2f5c;
+      --brand-light:  #1c4a8a;
+      --accent:       #00a8a8;
+      --accent-dark:  #00807f;
+      --accent-soft:  #e4f6f6;
 
       --ink:          #17212e;
       --ink-soft:     #5b6878;
@@ -343,12 +464,8 @@ STYLE = """
 
     body {
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-      background: var(--canvas);
-      color: var(--ink);
-      margin: 0;
-      font-size: 14px;
-      line-height: 1.5;
-      -webkit-font-smoothing: antialiased;
+      background: var(--canvas); color: var(--ink); margin: 0;
+      font-size: 14px; line-height: 1.5; -webkit-font-smoothing: antialiased;
     }
 
     .shell { max-width: 1640px; margin: 0 auto; padding: 0 28px 60px; }
@@ -357,8 +474,7 @@ STYLE = """
     .masthead {
       background: var(--brand);
       background-image: linear-gradient(135deg, var(--brand) 0%, #143a70 100%);
-      color: #fff;
-      position: sticky; top: 0; z-index: 50;
+      color: #fff; position: sticky; top: 0; z-index: 50;
       box-shadow: 0 1px 0 rgba(255,255,255,.08), 0 2px 14px rgba(9,24,48,.22);
     }
     .masthead-inner {
@@ -410,8 +526,7 @@ STYLE = """
       padding: 10px 12px; background: #fff; transition: border-color .13s, box-shadow .13s;
     }
     input[type=text]:focus, select:focus, textarea:focus {
-      outline:none; border-color: var(--accent);
-      box-shadow: 0 0 0 3px var(--accent-soft);
+      outline:none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft);
     }
     input[type=text]:disabled, select:disabled { background:#f6f8fa; color: var(--ink-faint); }
     #target { flex: 1 1 400px; min-width: 280px; }
@@ -423,8 +538,7 @@ STYLE = """
       font-family: inherit; font-size: 14px; font-weight: 500; line-height:1;
       border: 1px solid var(--line); background: #fff; color: var(--ink);
       border-radius: 8px; padding: 11px 16px; cursor: pointer;
-      transition: all .13s; white-space: nowrap; text-decoration: none;
-      display: inline-block;
+      transition: all .13s; white-space: nowrap; text-decoration: none; display: inline-block;
     }
     .btn:hover { border-color: #c9d2dd; background: #fafbfc; }
     .btn:active { transform: translateY(1px); }
@@ -451,8 +565,7 @@ STYLE = """
       display:flex; align-items:center; gap:11px;
       background: var(--amber-soft); border:1px solid #ecd9a4;
       border-left: 4px solid var(--amber);
-      color:#7c5b13; padding: 13px 17px; border-radius: 8px; margin: 16px 0;
-      font-size: 13.5px;
+      color:#7c5b13; padding: 13px 17px; border-radius: 8px; margin: 16px 0; font-size: 13.5px;
     }
     .pulse {
       width:9px; height:9px; border-radius:50%; background: var(--amber);
@@ -471,9 +584,7 @@ STYLE = """
     .log::-webkit-scrollbar-thumb { background: #2b4055; border-radius: 5px; }
 
     /* ---------------------------------------------------- section head */
-    .sectionhead {
-      display:flex; align-items:baseline; gap:13px; margin: 26px 0 13px;
-    }
+    .sectionhead { display:flex; align-items:baseline; gap:13px; margin: 26px 0 13px; }
     .sectionhead h2 {
       font-size: 17px; font-weight: 650; color: var(--brand); margin:0; letter-spacing:-0.2px;
     }
@@ -487,8 +598,7 @@ STYLE = """
     .tablewrap {
       background: var(--surface); border:1px solid var(--line);
       border-radius: var(--radius); box-shadow: var(--shadow);
-      max-height: calc(100vh - 210px);
-      overflow: auto;
+      max-height: calc(100vh - 210px); overflow: auto;
     }
     table { border-collapse: separate; border-spacing:0; width:100%; font-size: 13.5px; }
     thead th {
@@ -497,10 +607,7 @@ STYLE = """
       text-align:left; padding: 11px 12px; white-space: nowrap;
       border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5;
     }
-    tbody td {
-      padding: 9px 12px; vertical-align: top;
-      border-bottom: 1px solid var(--line-soft);
-    }
+    tbody td { padding: 9px 12px; vertical-align: top; border-bottom: 1px solid var(--line-soft); }
     tbody tr:hover { background: #fbfcfd; }
     tbody tr:last-child td { border-bottom: none; }
 
@@ -516,6 +623,13 @@ STYLE = """
     .muted { color: var(--ink-faint); font-weight: 400; }
     .datecell { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
 
+    /* the wide column (Activity by default) — roughly 4x a normal cell */
+    th.wide4 { min-width: 620px; }
+    td.wide4 {
+      min-width: 620px; max-width: 760px;
+      white-space: pre-wrap; word-break: break-word; line-height: 1.55;
+    }
+
     .badge {
       display:inline-block; font-size: 11px; font-weight: 600;
       padding: 2px 9px; border-radius: 99px; text-transform: capitalize;
@@ -528,13 +642,11 @@ STYLE = """
     .cellform { margin:0; }
     .cellin {
       border: 1px solid transparent; background: transparent; font: inherit;
-      color: inherit; padding: 5px 7px; border-radius: 6px; width: 100%;
-      transition: all .12s;
+      color: inherit; padding: 5px 7px; border-radius: 6px; width: 100%; transition: all .12s;
     }
     .cellin:hover { border-color: var(--line); background:#fff; }
     .cellin:focus {
-      border-color: var(--accent); background:#fff; outline:none;
-      box-shadow: 0 0 0 3px var(--accent-soft);
+      border-color: var(--accent); background:#fff; outline:none; box-shadow: 0 0 0 3px var(--accent-soft);
     }
     .cellin::placeholder { color: #c3ccd6; }
     textarea.cellin { resize: vertical; min-height: 40px; font-size: 12.5px; line-height:1.45; }
@@ -569,17 +681,13 @@ STYLE = """
       background: var(--surface); border:1px solid var(--line); border-radius: var(--radius);
       box-shadow: var(--shadow); position: sticky; top: 82px; overflow: hidden;
     }
-    .savedhead {
-      background: linear-gradient(135deg, var(--brand) 0%, #143a70 100%); color:#fff;
-      padding: 15px 18px;
-    }
+    .savedhead { background: linear-gradient(135deg, var(--brand) 0%, #143a70 100%); color:#fff; padding: 15px 18px; }
     .savedhead h2 { margin:0 0 3px; font-size: 15px; font-weight: 650; }
     .savedhead .n { font-size: 12px; color: rgba(255,255,255,.66); }
     .savedbody { padding: 12px 16px 16px; }
     .savedscroll { max-height: 62vh; overflow-y: auto; margin: 0 -6px; padding: 0 6px; }
     .savedscroll::-webkit-scrollbar { width: 7px; }
     .savedscroll::-webkit-scrollbar-thumb { background: #d2dae3; border-radius: 4px; }
-    .savedscroll::-webkit-scrollbar-thumb:hover { background: #b9c4d0; }
     .savedcard { padding: 13px 0; border-bottom: 1px solid var(--line-soft); }
     .savedcard:last-child { border-bottom:none; }
     .savedcard > a {
@@ -597,8 +705,7 @@ STYLE = """
     .jumpbar a {
       font-size: 12.5px; font-weight: 500; text-decoration:none;
       color: var(--ink-soft); background: var(--surface);
-      border:1px solid var(--line); border-radius: 99px; padding: 6px 13px;
-      transition: all .13s;
+      border:1px solid var(--line); border-radius: 99px; padding: 6px 13px; transition: all .13s;
     }
     .jumpbar a:hover { border-color: var(--accent); color: var(--accent-dark); background: var(--accent-soft); }
     .jumpbar a .n { color: var(--ink-faint); font-weight: 600; margin-left: 4px; }
@@ -606,13 +713,10 @@ STYLE = """
     .catblock { margin-top: 30px; scroll-margin-top: 78px; }
     .cathead {
       display:flex; align-items:center; gap:11px;
-      padding: 0 0 11px; margin-bottom: 15px;
-      border-bottom: 2px solid var(--line);
+      padding: 0 0 11px; margin-bottom: 15px; border-bottom: 2px solid var(--line);
     }
     .cathead .bar { width: 4px; height: 20px; border-radius: 3px; background: var(--accent); }
-    .cathead h2 {
-      margin:0; font-size: 16px; font-weight: 700; color: var(--brand); letter-spacing: -0.2px;
-    }
+    .cathead h2 { margin:0; font-size: 16px; font-weight: 700; color: var(--brand); letter-spacing: -0.2px; }
     .cathead .n {
       font-size: 11.5px; font-weight: 600; color: var(--accent-dark);
       background: var(--accent-soft); padding: 2px 9px; border-radius: 99px;
@@ -620,7 +724,6 @@ STYLE = """
     .cathead .top { margin-left:auto; font-size:12px; color: var(--ink-faint); text-decoration:none; }
     .cathead .top:hover { color: var(--accent-dark); }
 
-    /* one hue per section, in CATEGORIES order */
     .cat-0 .bar { background:#6366f1; }
     .cat-1 .bar { background:#0ea5e9; }
     .cat-2 .bar { background:#8b5cf6; }
@@ -633,10 +736,54 @@ STYLE = """
     .cat-9 .bar { background:#db2777; }
 
     .cattag {
-      display:inline-block;
-      font-size: 11px; font-weight: 600; color: var(--ink-faint);
+      display:inline-block; font-size: 11px; font-weight: 600; color: var(--ink-faint);
       background: var(--line-soft); padding: 2px 8px; border-radius: 4px;
     }
+
+    /* ---------------------------------------------------- CRM action boxes */
+    .boxrow { display:grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 24px; }
+    @media (max-width: 1050px) { .boxrow { grid-template-columns: 1fr; } }
+
+    .actionbox {
+      background: var(--surface); border:1px solid var(--line); border-radius: var(--radius);
+      box-shadow: var(--shadow); overflow: hidden; display:flex; flex-direction:column;
+    }
+    .boxhead {
+      padding: 14px 18px; display:flex; align-items:center; gap:10px;
+      border-bottom: 1px solid var(--line);
+    }
+    .boxhead .icon { font-size: 17px; }
+    .boxhead h2 { margin:0; font-size: 15px; font-weight: 650; color: var(--brand); }
+    .boxhead .n {
+      margin-left:auto; font-size: 11.5px; font-weight: 700;
+      padding: 3px 10px; border-radius: 99px;
+    }
+    .box-calls .boxhead { background: linear-gradient(180deg, #fffaf0 0%, #fff 100%); }
+    .box-calls .boxhead .n { background: var(--amber-soft); color: var(--amber); }
+    .box-stale .boxhead { background: linear-gradient(180deg, #f2f8ff 0%, #fff 100%); }
+    .box-stale .boxhead .n { background: var(--accent-soft); color: var(--accent-dark); }
+
+    .boxscroll { max-height: 290px; overflow-y: auto; padding: 4px 18px 14px; }
+    .boxscroll::-webkit-scrollbar { width: 7px; }
+    .boxscroll::-webkit-scrollbar-thumb { background: #d2dae3; border-radius: 4px; }
+
+    .boxitem { padding: 11px 0; border-bottom: 1px solid var(--line-soft); }
+    .boxitem:last-child { border-bottom:none; }
+    .boxitem .who { font-weight: 600; font-size: 13.5px; color: var(--brand); }
+    .boxitem .org { font-size: 12.5px; color: var(--ink-faint); margin-left: 6px; }
+    .boxitem .what { font-size: 13px; color: #3a4658; margin-top: 3px; line-height:1.45; }
+    .boxitem .when { font-size: 11.5px; color: var(--ink-faint); margin-top: 4px; }
+
+    .pill {
+      display:inline-block; font-size: 10.5px; font-weight: 700; letter-spacing:.03em;
+      padding: 2px 8px; border-radius: 99px; text-transform: uppercase; margin-left: 7px;
+    }
+    .pill-over { background: var(--red-soft); color: var(--red); }
+    .pill-soon { background: var(--amber-soft); color: var(--amber); }
+    .pill-cold { background: #eef1f5; color: var(--ink-soft); }
+
+    .boxempty { padding: 26px 18px; text-align:center; color: var(--ink-faint); font-size: 13px; }
+    .boxnote { font-size: 11.5px; color: var(--ink-faint); padding: 10px 18px; border-top: 1px solid var(--line-soft); }
   </style>
 """
 
@@ -1020,7 +1167,90 @@ CRM_PAGE = """
 """ + HEADER + """
 <div class="shell">
 
-  <div class="panel panel-pad searchbar">
+  <div class="boxrow">
+
+    <div class="actionbox box-calls">
+      <div class="boxhead">
+        <span class="icon">&#128222;</span>
+        <h2>Calls &amp; follow-ups</h2>
+        <span class="n">{{ boxes.followups|length }}</span>
+      </div>
+      {% if boxes.followups %}
+        <div class="boxscroll">
+          {% for f in boxes.followups %}
+            <div class="boxitem">
+              <div>
+                <span class="who">{{ f.who }}</span>
+                {% if f.org %}<span class="org">{{ f.org }}</span>{% endif %}
+                {% if f.overdue %}
+                  <span class="pill pill-over">{{ f.days_over }}d overdue</span>
+                {% elif f.due %}
+                  <span class="pill pill-soon">due</span>
+                {% endif %}
+              </div>
+              <div class="what">{{ f.task }}</div>
+              {% if f.due_raw %}<div class="when">Due {{ f.due_raw }}</div>{% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="boxempty">
+          Nothing outstanding.<br>
+          {% if not boxes.cols.followup and not boxes.cols.due %}
+            <span style="font-size:12px;">No follow-up column found in this sheet.</span>
+          {% endif %}
+        </div>
+      {% endif %}
+      {% if boxes.cols.followup or boxes.cols.due %}
+        <div class="boxnote">
+          Reading
+          {% if boxes.cols.followup %}<b>{{ boxes.cols.followup }}</b>{% endif %}
+          {% if boxes.cols.due %}{% if boxes.cols.followup %} and {% endif %}<b>{{ boxes.cols.due }}</b>{% endif %}
+        </div>
+      {% endif %}
+    </div>
+
+    <div class="actionbox box-stale">
+      <div class="boxhead">
+        <span class="icon">&#128228;</span>
+        <h2>Reconnect — quiet {{ boxes.stale_days }}+ days</h2>
+        <span class="n">{{ boxes.stale|length }}</span>
+      </div>
+      {% if boxes.stale %}
+        <div class="boxscroll">
+          {% for s in boxes.stale %}
+            <div class="boxitem">
+              <div>
+                <span class="who">{{ s.who }}</span>
+                {% if s.org %}<span class="org">{{ s.org }}</span>{% endif %}
+                {% if s.days %}
+                  <span class="pill pill-cold">{{ s.days }} days</span>
+                {% else %}
+                  <span class="pill pill-cold">never</span>
+                {% endif %}
+              </div>
+              <div class="when">
+                {% if s.last_raw %}Last contact {{ s.last_raw }}{% else %}No contact date recorded{% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="boxempty">
+          Everyone contacted within {{ boxes.stale_days }} days.<br>
+          {% if not boxes.cols.last %}
+            <span style="font-size:12px;">No last-contact column found in this sheet.</span>
+          {% endif %}
+        </div>
+      {% endif %}
+      {% if boxes.cols.last %}
+        <div class="boxnote">Reading <b>{{ boxes.cols.last }}</b></div>
+      {% endif %}
+    </div>
+
+  </div>
+
+  <div class="panel panel-pad" style="margin-top:20px;">
     <form method="get" action="/crm">
       <div class="searchrow">
         <div>
@@ -1059,14 +1289,18 @@ CRM_PAGE = """
     <div class="tablewrap">
       <table>
         <thead>
-          <tr>{% for h in headers %}<th>{{ h }}</th>{% endfor %}</tr>
+          <tr>
+            {% for h in headers %}
+              <th class="{% if wide_col in h.lower() %}wide4{% endif %}">{{ h }}</th>
+            {% endfor %}
+          </tr>
         </thead>
         <tbody>
           {% for row in rows %}
             <tr>
               {% for h in headers %}
                 {% set value = row.get(h, '') %}
-                <td>
+                <td class="{% if wide_col in h.lower() %}wide4{% endif %}">
                   {% if value.startswith('http://') or value.startswith('https://') %}
                     <a class="url" href="{{ value }}" target="_blank" rel="noopener noreferrer">{{ value }}</a>
                   {% elif '@' in value and ' ' not in value and '.' in value %}
