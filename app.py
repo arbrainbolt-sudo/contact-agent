@@ -393,6 +393,7 @@ def crm_page():
         suggestions=suggestions,
         wide_col=wide,
         workbook=store.XLSX_FILE,
+        backup=store.backup_info(),
         has_logo=logo_exists(),
         notify_status=notify.status_line(),
         tab="crm",
@@ -422,6 +423,18 @@ def crm_edit():
     if sheet and excel_row and col:
         store.update_cell(sheet, excel_row, col, request.form.get("value", "").strip())
     return redirect(url_for("crm_page", sheet=sheet, q=request.form.get("q", "") or None))
+
+
+@app.route("/crm/backup", methods=["POST"])
+def crm_backup():
+    store.backup_now()
+    return redirect(url_for("crm_page", sheet=request.form.get("sheet", "")))
+
+
+@app.route("/crm/restore", methods=["POST"])
+def crm_restore():
+    store.restore_backup()
+    return redirect(url_for("crm_page", sheet=request.form.get("sheet", "")))
 
 
 @app.route("/crm/add", methods=["POST"])
@@ -1441,10 +1454,18 @@ CRM_PAGE = """
           <label class="fieldlabel" for="q">Search all columns</label>
           <input type="text" id="q" name="q" value="{{ q }}" placeholder="name, company, stage...">
         </div>
-        <div style="align-self:flex-end; display:flex; gap:8px; align-items:center;">
+        <div style="align-self:flex-end; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
           <button class="btn" type="submit">Search</button>
           {% if q %}<a href="/crm?sheet={{ sheet }}" style="font-size:13px; color:var(--ink-soft);">Clear</a>{% endif %}
           <a class="btn btn-primary" href="/crm?sheet={{ sheet }}&add=1">+ Add row</a>
+          <button class="btn" type="submit" formaction="/crm/backup" formmethod="post"
+                  title="Copy results.xlsx to results_backup.xlsx now">&#128190; Back up now</button>
+          {% if backup.exists %}
+            <button class="btn btn-danger" type="submit" formaction="/crm/restore" formmethod="post"
+                    onclick="return confirm('Replace results.xlsx with the backup from {{ backup.when }}?\\n\\nAnything saved since then will be lost.');">
+              &#8634; Restore
+            </button>
+          {% endif %}
         </div>
       </div>
     </form>
@@ -1534,6 +1555,12 @@ CRM_PAGE = """
       <b>{{ workbook }}</b> &rarr; sheet <b>{{ sheet }}</b>.
       The <b>{{ wide_col }}</b> column saves when you click away from it.
       Keep the file closed in Excel while using this page.
+      {% if backup.exists %}
+        <br>Backup last written <b>{{ backup.when }}</b>
+        ({{ (backup.size / 1024) | round(1) }} KB) &middot; also taken automatically before every save.
+      {% else %}
+        <br>No backup yet - press <b>Back up now</b> to make one.
+      {% endif %}
     </p>
 
   {% else %}
@@ -1564,4 +1591,3 @@ CRM_PAGE = """
 
 if __name__ == "__main__":
     app.run(port=5000, debug=True, use_reloader=False)
-
