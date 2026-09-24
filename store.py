@@ -1,4 +1,3 @@
-cd ~/Documents/contact-agent && cat > store.py << 'PYEOF'
 """Shared spreadsheet storage. One results.xlsx, several worksheets."""
 
 import os
