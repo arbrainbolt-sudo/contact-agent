@@ -11,6 +11,7 @@ from flask import Flask, request, redirect, url_for, render_template_string
 
 import contact_agent
 import crm
+import linkedin
 import news
 import notify
 import store
@@ -20,6 +21,7 @@ app = Flask(__name__)
 state = {"running": False, "target": "", "country": "", "log": []}
 news_state = {"running": False, "log": [], "last_run": "", "last_run_ts": 0.0}
 crm_state = {"running": False, "log": [], "last_run": "", "sheet": ""}
+li_state = {"running": False, "log": [], "last_run": ""}
 
 NO_COMPANY = "__blank__"
 NEWS_TIME = os.getenv("NEWS_TIME", "07:00")                 # daily auto-run, 24h clock
@@ -29,6 +31,7 @@ CRM_STALE_DAYS = int(os.getenv("CRM_STALE_DAYS", "30"))     # "needs reconnectin
 CRM_WIDE_COL = os.getenv("CRM_WIDE_COL", "activity")        # wide, editable column
 CRM_ACTIVITY_COL = os.getenv("CRM_ACTIVITY_COL", "")        # blank = use CRM_WIDE_COL
 CRM_MAX_COLS = int(os.getenv("CRM_MAX_COLS", "6"))          # hide columns 7 onwards
+LINKEDIN_TIME = os.getenv("LINKEDIN_TIME", "07:00")         # daily post, 24h clock
 
 
 # ---------------------------------------------------------------- helpers
@@ -259,6 +262,30 @@ def news_worker(push=True):
         news_state["running"] = False
 
 
+def li_log(message):
+    print(message)
+    li_state["log"].append(message)
+
+
+def li_worker(force=False):
+    try:
+        linkedin.run_daily(log=li_log, force=force)
+        li_state["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    except Exception as e:
+        li_log(f"ERROR: {e}")
+    finally:
+        li_state["running"] = False
+
+
+def start_li_run(force=False):
+    if li_state["running"]:
+        return False
+    li_state["running"] = True
+    li_state["log"] = []
+    threading.Thread(target=li_worker, args=(force,), daemon=True).start()
+    return True
+
+
 def crm_worker(sheet):
     try:
         headers, rows = store.read_sheet_auto(sheet)
@@ -291,14 +318,23 @@ def start_news_run(push=True, force=False):
 
 
 def scheduler():
-    """Runs the news agent once a day at NEWS_TIME."""
-    done_on = None
+    """Daily jobs: the news digest and the LinkedIn post."""
+    news_done = None
+    li_done = None
     while True:
-        now = datetime.now()
-        if now.strftime("%H:%M") == NEWS_TIME and done_on != date.today():
-            done_on = date.today()
+        clock = datetime.now().strftime("%H:%M")
+        today = date.today()
+
+        if clock == NEWS_TIME and news_done != today:
+            news_done = today
             print(f"[scheduler] daily news run at {NEWS_TIME}")
             start_news_run(push=True, force=True)
+
+        if clock == LINKEDIN_TIME and li_done != today:
+            li_done = today
+            print(f"[scheduler] daily LinkedIn post at {LINKEDIN_TIME}")
+            start_li_run(force=True)
+
         time.sleep(30)
 
 
@@ -423,6 +459,41 @@ def crm_edit():
     if sheet and excel_row and col:
         store.update_cell(sheet, excel_row, col, request.form.get("value", "").strip())
     return redirect(url_for("crm_page", sheet=sheet, q=request.form.get("q", "") or None))
+
+
+@app.route("/linkedin")
+def linkedin_page():
+    post = linkedin.latest()
+    return render_template_string(
+        LINKEDIN_PAGE,
+        post=post,
+        past=[p for p in linkedin.history()[1:13]],
+        today=datetime.now().strftime("%Y-%m-%d"),
+        post_time=LINKEDIN_TIME,
+        has_logo=logo_exists(),
+        notify_status=notify.status_line(),
+        tab="linkedin",
+        state=li_state,
+    )
+
+
+@app.route("/linkedin/run", methods=["POST"])
+def linkedin_run():
+    start_li_run(force=True)
+    return redirect(url_for("linkedin_page"))
+
+
+@app.route("/linkedin/push", methods=["POST"])
+def linkedin_push():
+    post = linkedin.latest()
+    if post:
+        notify.send(
+            f"\U0001F4DD <b>Today's LinkedIn post</b>\n\n"
+            f"{post.get('post', '')}\n\n"
+            f"Source: {post.get('title', '')}\n{post.get('url', '')}",
+            log=li_log,
+        )
+    return redirect(url_for("linkedin_page"))
 
 
 @app.route("/crm/backup", methods=["POST"])
@@ -922,6 +993,54 @@ STYLE = """
     .sugg.p-low .action { border-left-color: var(--line); }
     .timing { font-size: 11.5px; color: var(--ink-faint); margin-top: 4px; padding-left: 13px; }
 
+
+    /* ---------------------------------------------------- LinkedIn page */
+    .liwrap { display:grid; grid-template-columns: minmax(0,1.05fr) minmax(0,1fr); gap: 20px; margin-top: 22px; }
+    @media (max-width: 1100px) { .liwrap { grid-template-columns: 1fr; } }
+
+    .libox {
+      background: var(--surface); border:1px solid var(--line); border-radius: var(--radius);
+      box-shadow: var(--shadow); overflow:hidden; display:flex; flex-direction:column;
+    }
+    .libox .boxhead { background: linear-gradient(180deg, #f6fbfb 0%, #fff 100%); }
+    .libox .boxhead .n { background: var(--accent-soft); color: var(--accent-dark); }
+    .libody { padding: 18px 20px 20px; }
+
+    .arttitle { font-size: 17px; font-weight: 650; color: var(--brand); line-height:1.4; margin: 0 0 9px; }
+    .arttitle a { color: var(--brand); text-decoration:none; }
+    .arttitle a:hover { color: var(--accent-dark); text-decoration: underline; }
+    .artsum { font-size: 13.5px; color: #3a4658; line-height:1.6; margin: 0 0 14px; }
+
+    .posttext {
+      font-size: 15px; line-height: 1.68; color: var(--ink);
+      white-space: pre-wrap; background: #fbfcfd; border:1px solid var(--line);
+      border-radius: 8px; padding: 16px 18px; max-height: 340px; overflow-y:auto;
+    }
+    .posttext::-webkit-scrollbar { width: 7px; }
+    .posttext::-webkit-scrollbar-thumb { background:#d2dae3; border-radius:4px; }
+
+    .wordcount { font-size: 11.5px; font-weight: 600; padding: 2px 9px; border-radius: 99px; }
+    .wc-ok { background: var(--green-soft); color:#15803d; }
+    .wc-off { background: var(--amber-soft); color: var(--amber); }
+
+    .shareimg {
+      width: 100%; height: auto; display:block; border-radius: 8px;
+      border:1px solid var(--line); box-shadow: var(--shadow);
+    }
+    .imgnote { font-size: 11.5px; color: var(--ink-faint); margin-top: 10px; line-height:1.5; }
+
+    .pastrow {
+      display:flex; gap:12px; align-items:baseline; padding: 10px 0;
+      border-bottom: 1px solid var(--line-soft); font-size: 13px;
+    }
+    .pastrow:last-child { border-bottom:none; }
+    .pastrow .d { color: var(--ink-faint); font-size:11.5px; white-space:nowrap;
+                  font-variant-numeric: tabular-nums; min-width: 78px; }
+    .pastrow a { color: var(--brand); text-decoration:none; font-weight:500; }
+    .pastrow a:hover { color: var(--accent-dark); text-decoration: underline; }
+
+    .copybtn.done { background: var(--green); border-color: var(--green); color:#fff; }
+
     /* ---------------------------------------------------- CRM add row */
     .addrow { background: var(--accent-soft); }
     .addrow td { padding: 10px 12px; }
@@ -952,6 +1071,7 @@ HEADER = """
         <a href="/" class="{% if tab == 'contacts' %}on{% endif %}">Contacts</a>
         <a href="/news" class="{% if tab == 'news' %}on{% endif %}">AI News</a>
         <a href="/crm" class="{% if tab == 'crm' %}on{% endif %}">CRM</a>
+        <a href="/linkedin" class="{% if tab == 'linkedin' %}on{% endif %}">LinkedIn Post</a>
       </nav>
 
       <div class="spacer"></div>
@@ -1581,6 +1701,194 @@ CRM_PAGE = """
     document.addEventListener('DOMContentLoaded', function () {
       document.querySelectorAll('textarea.autogrow').forEach(autogrow);
     });
+  </script>
+
+</div>
+</body>
+</html>
+"""
+
+
+LINKEDIN_PAGE = """
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Hire2o - LinkedIn Post</title>
+  {% if state.running %}<meta http-equiv="refresh" content="4">{% endif %}
+""" + STYLE + """
+</head>
+<body>
+""" + HEADER + """
+<div class="shell">
+
+  <div class="panel panel-pad searchbar">
+    <form method="post" action="/linkedin/run">
+      <div class="searchrow" style="justify-content:space-between;">
+        <div style="display:flex; gap:9px; align-items:center;">
+          <button class="btn btn-primary" type="submit" {% if state.running %}disabled{% endif %}>
+            {% if state.running %}Writing...{% else %}&#10024; Generate today's post{% endif %}
+          </button>
+          {% if post and notify_status != 'off' %}
+            <button class="btn btn-ghost" type="submit" formaction="/linkedin/push">
+              &#128241; Send to phone
+            </button>
+          {% endif %}
+        </div>
+        <div class="counts">
+          Runs automatically at <b>{{ post_time }}</b> ET daily
+          {% if post %} &middot; today's post dated <b>{{ post.date }}</b>{% endif %}
+        </div>
+      </div>
+    </form>
+  </div>
+
+  {% if state.running %}
+    <div class="banner">
+      <span class="pulse"></span>
+      <span>Finding an article, writing the post and rendering the image - this page refreshes every 4 seconds.</span>
+    </div>
+  {% endif %}
+
+  {% if state.log %}
+    <div class="log" style="height:130px;">{% for line in state.log %}{{ line }}
+{% endfor %}</div>
+  {% endif %}
+
+  {% if post %}
+    <div class="liwrap">
+
+      <div class="libox">
+        <div class="boxhead">
+          <span class="icon">&#128240;</span>
+          <h2>1 &middot; The article</h2>
+          <span class="n">{{ post.source or 'source' }}</span>
+        </div>
+        <div class="libody">
+          <p class="arttitle">
+            <a href="{{ post.url }}" target="_blank" rel="noopener noreferrer">{{ post.title }}</a>
+          </p>
+          {% if post.summary %}<p class="artsum">{{ post.summary }}</p>{% endif %}
+          <div class="meta" style="margin-bottom:12px;">
+            {% if post.source %}<span class="sourcetag">{{ post.source }}</span>{% endif %}
+            {% if post.published %}<span>{{ post.published }}</span>{% endif %}
+          </div>
+          <a class="cardlink" href="{{ post.url }}" target="_blank" rel="noopener noreferrer">{{ post.url }}</a>
+          <div style="margin-top:14px; display:flex; gap:8px;">
+            <a class="btn btn-sm" href="{{ post.url }}" target="_blank" rel="noopener noreferrer">
+              Read the article &#8599;
+            </a>
+            <button class="btn btn-sm copybtn" type="button"
+                    onclick="copyText(this, {{ post.url | tojson }})">Copy link</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="libox">
+        <div class="boxhead">
+          <span class="icon">&#9997;</span>
+          <h2>2 &middot; Your post</h2>
+          {% set wc = post.post.split() | length %}
+          <span class="n {% if 100 <= wc <= 150 %}wc-ok{% else %}wc-off{% endif %}">{{ wc }} words</span>
+        </div>
+        <div class="libody">
+          {% if post.post %}
+            <div class="posttext" id="posttext">{{ post.post }}</div>
+            <div style="margin-top:14px; display:flex; gap:8px; flex-wrap:wrap;">
+              <button class="btn btn-sm btn-primary copybtn" type="button"
+                      onclick="copyText(this, {{ post.post | tojson }})">Copy post text</button>
+              <a class="btn btn-sm" href="https://www.linkedin.com/feed/" target="_blank"
+                 rel="noopener noreferrer">Open LinkedIn &#8599;</a>
+            </div>
+          {% else %}
+            <p class="muted">No post text - the model returned nothing. Press
+            <b>Generate today's post</b> to try again.</p>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="libox">
+        <div class="boxhead">
+          <span class="icon">&#127912;</span>
+          <h2>3 &middot; The image</h2>
+          <span class="n">1200 &times; 628</span>
+        </div>
+        <div class="libody">
+          {% if post.image_file %}
+            <img class="shareimg"
+                 src="{{ url_for('static', filename='posts/' ~ post.image_file) }}"
+                 alt="Share image">
+            <p class="imgnote">
+              Right-click &rarr; <b>Save image</b>, then attach it to your LinkedIn post.
+              Sized for LinkedIn's link-preview ratio.
+            </p>
+            <div style="margin-top:10px; display:flex; gap:8px;">
+              <a class="btn btn-sm"
+                 href="{{ url_for('static', filename='posts/' ~ post.image_file) }}"
+                 download>&#11015; Download image</a>
+              <a class="btn btn-sm btn-ghost"
+                 href="{{ url_for('static', filename='posts/' ~ post.image_file) }}"
+                 target="_blank" rel="noopener noreferrer">Open full size &#8599;</a>
+            </div>
+          {% else %}
+            <p class="muted">No image was generated for this post.</p>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="libox">
+        <div class="boxhead">
+          <span class="icon">&#128338;</span>
+          <h2>4 &middot; Earlier posts</h2>
+          <span class="n">{{ past|length }}</span>
+        </div>
+        <div class="libody" style="padding-top:6px;">
+          {% if past %}
+            <div style="max-height:320px; overflow-y:auto;">
+              {% for p in past %}
+                <div class="pastrow">
+                  <span class="d">{{ p.date }}</span>
+                  <span>
+                    <a href="{{ p.url }}" target="_blank" rel="noopener noreferrer">{{ p.title[:78] }}</a>
+                    {% if p.post %}
+                      <button class="btn btn-sm btn-ghost copybtn" type="button"
+                              style="margin-left:6px;"
+                              onclick="copyText(this, {{ p.post | tojson }})">copy</button>
+                    {% endif %}
+                  </span>
+                </div>
+              {% endfor %}
+            </div>
+          {% else %}
+            <p class="muted" style="font-size:13px;">Nothing yet. Today's is your first.</p>
+          {% endif %}
+        </div>
+      </div>
+
+    </div>
+
+  {% else %}
+    <div class="panel empty">
+      <div class="big">&#128221;</div>
+      <p>
+        No post yet for today.<br>
+        Press <b>Generate today's post</b> to find an AI article and draft something from it.
+      </p>
+    </div>
+  {% endif %}
+
+  <script>
+    function copyText(btn, text) {
+      navigator.clipboard.writeText(text).then(function () {
+        var was = btn.textContent;
+        btn.textContent = 'Copied';
+        btn.classList.add('done');
+        setTimeout(function () {
+          btn.textContent = was;
+          btn.classList.remove('done');
+        }, 1600);
+      });
+    }
   </script>
 
 </div>
