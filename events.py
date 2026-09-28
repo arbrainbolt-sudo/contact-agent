@@ -588,17 +588,27 @@ PAGE = """
 <title>Events</title>
 <style>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-         margin: 0; padding: 20px; background: #f6f7f9; color: #1c1c1c; }
-  .wrap { max-width: 1400px; margin: 0 auto; }
-  h1 { font-size: 24px; margin: 0 0 4px; color: #1a3a6b; }
-  .topbar { display:flex; align-items:center; gap:14px; margin-bottom:18px; }
-  .topbar img { height:42px; width:auto; }
-  .wordmark { font-size:24px; font-weight:700; letter-spacing:-0.5px; color:#1a3a6b; }
+         margin: 0; padding: 0; background: #ebeef2; color: #1c1c1c; }
+  .wrap { max-width: 1400px; margin: 0 auto; padding: 20px; }
+
+  /* Top bar — matches the Contacts / AI News / CRM pages */
+  .appbar { background: #103363; }
+  .appbar-in { max-width: 1400px; margin: 0 auto; height: 64px; box-sizing: border-box;
+               padding: 0 20px; display: flex; align-items: center; gap: 10px; }
+  .logo-chip { background: #fff; border-radius: 8px; padding: 6px 11px; display: flex;
+               align-items: center; flex: none; }
+  .logo-chip img { height: 20px; width: auto; display: block; }
+  .logo-chip .wordmark { font-size: 14px; font-weight: 700; color: #103363;
+                         letter-spacing: -0.3px; }
+  .vr { width: 1px; height: 26px; background: rgba(255,255,255,.22); margin: 0 6px; flex: none; }
+  .appname { color: #a4b1c3; font-size: 15px; margin-right: 8px; white-space: nowrap; }
+  .tabs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+  .tabs a { color: #c6ced9; text-decoration: none; font-size: 15px; padding: 8px 15px;
+            border-radius: 8px; white-space: nowrap; }
+  .tabs a:hover { color: #fff; background: rgba(255,255,255,.09); }
+  .tabs a.on { background: #fff; color: #0f2f5c; font-weight: 600; }
+
   .sub { font-size: 13px; color: #666; margin-bottom: 4px; }
-  nav { margin-bottom: 18px; display: flex; gap: 18px; flex-wrap: wrap; font-size: 15px;
-        border-bottom: 1px solid #e0e3e8; padding-bottom: 10px; }
-  nav a { color: #1a3a6b; text-decoration: none; }
-  nav a.on { font-weight: 700; border-bottom: 2px solid #96C950; padding-bottom: 9px; }
 
   .bar { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin: 12px 0 18px; }
   .btn { background: #1a3a6b; color: #fff; border: none; border-radius: 6px;
@@ -639,23 +649,30 @@ PAGE = """
                 font-size: 13px; width: 100%; }
   @media (max-width: 760px) { body { padding: 12px; } }
 </style>
-</head><body><div class="wrap">
+</head><body>
 
-<div class="topbar">
-  {% if has_logo %}
-    <img src="{{ url_for('static', filename='logo.png') }}" alt="Hire2o">
-  {% else %}
-    <span class="wordmark">Hire2o</span>
-  {% endif %}
-  <span class="wordmark" style="font-weight:400; color:#555;">Events</span>
-</div>
+<header class="appbar">
+  <div class="appbar-in">
+    <span class="logo-chip">
+      {% if has_logo %}
+        <img src="{{ url_for('static', filename='logo.png') }}" alt="Hire2o">
+      {% else %}
+        <span class="wordmark">Hire2o</span>
+      {% endif %}
+    </span>
+    <span class="vr"></span>
+    <span class="appname">Workbench</span>
+    <nav class="tabs">
+      <a href="/">Contacts</a>
+      <a href="/news">AI News</a>
+      <a href="/crm">CRM</a>
+      <a href="/linkedin">LinkedIn Post</a>
+      <a class="on" href="/events">Events</a>
+    </nav>
+  </div>
+</header>
 
-<nav>
-  <a href="/">Contacts</a>
-  <a href="/news">News</a>
-  <a href="/crm">CRM</a>
-  <a class="on" href="/events">Events</a>
-</nav>
+<div class="wrap">
 
 <div class="sub">{{ total }} events &middot; "Events" sheet in {{ workbook }}</div>
 
