@@ -26,7 +26,8 @@ import threading
 from datetime import datetime, date, timedelta
 
 import requests
-from flask import Blueprint, request, redirect, url_for, render_template_string
+from flask import (Blueprint, request, redirect, url_for,
+                   render_template_string, current_app)
 from openpyxl import Workbook, load_workbook
 
 import store
@@ -516,6 +517,14 @@ start_scheduler()
 
 # ------------------------------------------------------------------- routes
 
+def _logo_exists():
+    """Same static/logo.png the Contacts, News and CRM pages use."""
+    try:
+        return os.path.exists(os.path.join(current_app.static_folder, "logo.png"))
+    except Exception:
+        return False
+
+
 def _sort_key(row):
     """Dated events first, soonest to latest; undated last, alphabetical."""
     iso = row.get("sort_date") or ""
@@ -540,7 +549,7 @@ def events_page():
         PAGE, interested=interested, boxes=boxes,
         suggestions=MEANT_FOR_SUGGESTIONS, labels=CATEGORY_LABELS,
         workbook=store.XLSX_FILE, total=len(rows), status=STATUS,
-        refresh_hour=REFRESH_HOUR,
+        refresh_hour=REFRESH_HOUR, has_logo=_logo_exists(),
     )
 
 
@@ -582,6 +591,9 @@ PAGE = """
          margin: 0; padding: 20px; background: #f6f7f9; color: #1c1c1c; }
   .wrap { max-width: 1400px; margin: 0 auto; }
   h1 { font-size: 24px; margin: 0 0 4px; color: #1a3a6b; }
+  .topbar { display:flex; align-items:center; gap:14px; margin-bottom:18px; }
+  .topbar img { height:42px; width:auto; }
+  .wordmark { font-size:24px; font-weight:700; letter-spacing:-0.5px; color:#1a3a6b; }
   .sub { font-size: 13px; color: #666; margin-bottom: 4px; }
   nav { margin-bottom: 18px; display: flex; gap: 18px; flex-wrap: wrap; font-size: 15px;
         border-bottom: 1px solid #e0e3e8; padding-bottom: 10px; }
@@ -629,6 +641,15 @@ PAGE = """
 </style>
 </head><body><div class="wrap">
 
+<div class="topbar">
+  {% if has_logo %}
+    <img src="{{ url_for('static', filename='logo.png') }}" alt="Hire2o">
+  {% else %}
+    <span class="wordmark">Hire2o</span>
+  {% endif %}
+  <span class="wordmark" style="font-weight:400; color:#555;">Events</span>
+</div>
+
 <nav>
   <a href="/">Contacts</a>
   <a href="/news">News</a>
@@ -636,7 +657,6 @@ PAGE = """
   <a class="on" href="/events">Events</a>
 </nav>
 
-<h1>Events</h1>
 <div class="sub">{{ total }} events &middot; "Events" sheet in {{ workbook }}</div>
 
 <div class="bar">
@@ -654,11 +674,11 @@ PAGE = """
   </span>
 </div>
 
-{% macro event_table(rows, show_cat=False) %}
+{% macro event_table(rows, show_cat=False, co_label='Organizer') %}
   {% if rows %}
   <table>
     <tr>
-      <th style="width:28px"></th><th>Date</th><th>Company</th><th>Event</th>
+      <th style="width:28px"></th><th>Date</th><th>{{ co_label }}</th><th>Event</th>
       <th>Location</th><th>Meant for</th><th>Register</th>
       {% if show_cat %}<th>Where</th>{% endif %}<th></th>
     </tr>
@@ -692,20 +712,21 @@ PAGE = """
 
 <div class="box mine">
   <h2>&#9733; My Interest &mdash; {{ interested|length }}</h2>
-  {{ event_table(interested, show_cat=True) }}
+  {{ event_table(interested, show_cat=True, co_label='Organizer / Company') }}
 </div>
 
 <div class="grid">
   {% for key, label, rows in boxes %}
+  {% set co_label = 'Company' if key == 'bigtech' else 'Organizer' %}
   <div class="box">
     <h2>{{ label }} &mdash; {{ rows|length }}</h2>
-    {{ event_table(rows) }}
+    {{ event_table(rows, co_label=co_label) }}
     <details>
       <summary>+ Add an event</summary>
       <form class="form" method="post" action="/events/add">
         <input type="hidden" name="category" value="{{ key }}">
         <input name="date" placeholder="Date e.g. 2027-05-14">
-        <input name="company" placeholder="Company / organiser">
+        <input name="company" placeholder="{{ co_label }}">
         <input name="event" placeholder="Event name">
         <input name="location" placeholder="Location">
         <input name="meant_for" list="meantfor" placeholder="Meant for">
