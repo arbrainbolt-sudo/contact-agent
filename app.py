@@ -1073,6 +1073,7 @@ HEADER = """
         <a href="/news" class="{% if tab == 'news' %}on{% endif %}">AI News</a>
         <a href="/crm" class="{% if tab == 'crm' %}on{% endif %}">CRM</a>
         <a href="/linkedin" class="{% if tab == 'linkedin' %}on{% endif %}">LinkedIn Post</a>
+        <a href="/events">Events</a>
       </nav>
 
       <div class="spacer"></div>
