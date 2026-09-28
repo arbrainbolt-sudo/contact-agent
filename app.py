@@ -8,7 +8,7 @@ from datetime import datetime, date, timedelta
 from urllib.parse import urlparse
 
 from flask import Flask, request, redirect, url_for, render_template_string
-
+from events import bp as events_bp
 import contact_agent
 import crm
 import linkedin
@@ -17,6 +17,7 @@ import notify
 import store
 
 app = Flask(__name__)
+app.register_blueprint(events_bp)
 
 state = {"running": False, "target": "", "country": "", "log": []}
 news_state = {"running": False, "log": [], "last_run": "", "last_run_ts": 0.0}
