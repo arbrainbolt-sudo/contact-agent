@@ -280,8 +280,26 @@ def _classify(location):
 
 
 def _interesting(text):
+    """Whole-word match. Substring matching turns 'Braiding' into an AI event."""
     low = (text or "").lower()
-    return any(k in low for k in INTEREST_KEYWORDS)
+    return any(re.search(r"\b" + re.escape(k) + r"\b", low) for k in INTEREST_KEYWORDS)
+
+
+def _event_url(node, base="https://luma.com"):
+    """Find the event's own link, whatever the site calls that field."""
+    for key in ("url", "slug", "event_url", "permalink", "link", "canonical_url",
+                "short_url", "public_url"):
+        val = node.get(key)
+        if isinstance(val, str) and val.strip():
+            val = val.strip()
+            if val.startswith("http"):
+                return val
+            if "/" not in val or val.startswith("/"):
+                return f"{base}/{val.lstrip('/')}"
+    inner = node.get("event")
+    if isinstance(inner, dict):
+        return _event_url(inner, base)
+    return ""
 
 
 def _walk_json(node, found):
@@ -353,13 +371,12 @@ def fetch_luma(city_slug, city_label):
         if not _interesting(f"{name} {location}"):
             continue
         seen.add(name.lower())
-        slug = node.get("url") or node.get("api_id") or ""
-        link = slug if str(slug).startswith("http") else f"https://luma.com/{slug}"
         out.append({
             "date": iso or start[:10], "sort_date": iso,
             "company": "", "event": name, "location": location,
-            "meant_for": "", "register_url": link, "source": "luma",
+            "meant_for": "", "register_url": _event_url(node), "source": "luma",
         })
+    print(f"[events] luma/{city_slug}: {len(found)} objects, {len(out)} kept")
     return out
 
 
@@ -386,11 +403,11 @@ def fetch_generic(url, source_name, city_label):
         location = _location_of(node) or city_label
         if not _interesting(f"{name} {location}"):
             continue
-        link = node.get("url") or url
+        link = _event_url(node, base=re.match(r"https?://[^/]+", url).group(0))
         out.append({
             "date": iso, "sort_date": iso, "company": "", "event": name,
             "location": location, "meant_for": "",
-            "register_url": link if str(link).startswith("http") else url,
+            "register_url": link or url,
             "source": source_name,
         })
     return out
@@ -584,7 +601,7 @@ PAGE = """
             letter-spacing: .04em; color: #444; }
   .box.mine { border: 2px solid #96C950; background: #fbfdf6; }
   .box.mine h2 { color: #4d7a1f; }
-  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); gap: 18px; }
+  .grid { display: block; }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: .04em;
@@ -608,7 +625,7 @@ PAGE = """
           gap: 8px; margin-top: 10px; }
   .form input { padding: 7px 9px; border: 1px solid #d5d9e0; border-radius: 6px;
                 font-size: 13px; width: 100%; }
-  @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } body { padding: 12px; } }
+  @media (max-width: 760px) { body { padding: 12px; } }
 </style>
 </head><body><div class="wrap">
 
