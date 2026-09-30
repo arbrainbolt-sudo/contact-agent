@@ -1092,7 +1092,7 @@ CONTACTS_PAGE = """
 <head>
   <meta charset="utf-8">
   <title>Hire2o - Contacts</title>
-  {% if state.running %}<meta http-equiv="refresh" content="3">{% endif %}
+  {% if state.running %}<meta http-equiv="refresh" content="30">{% endif %}
 """ + STYLE + """
 </head>
 <body>
