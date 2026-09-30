@@ -63,8 +63,23 @@ INTEREST_KEYWORDS = [
     "startup", "founder", "entrepreneur", "venture", "vc", "pitch", "demo day",
     "fintech", "finance", "payments", "blockchain",
     "tech", "developer", "engineering", "software", "data", "cloud", "devops",
-    "hackathon", "workshop", "meetup", "networking", "python", "kubernetes",
+    "hackathon", "meetup", "networking", "python", "kubernetes",
     "aws", "azure", "salesforce", "databricks", "open source", "career", "hiring",
+    "product", "saas", "b2b", "investor", "accelerator", "incubator",
+    "demo night", "demo day", "build night", "pitch night", "lightning talk",
+]
+
+# Vetoes the keyword match. Luma's city pages carry a lot of craft, wellness
+# and social events, and "workshop" or "networking" alone let them through.
+EXCLUDE_KEYWORDS = [
+    "yoga", "sound bath", "meditation", "breathwork", "pilates", "run club",
+    "knit", "knitting", "crochet", "yarn", "fiber arts", "braiding", "quilt",
+    "watercolor", "painting", "pastel", "drawing", "collage", "journal",
+    "ceramics", "pottery", "flower", "floral", "candle", "craft",
+    "dating", "singles", "speed dating", "platonic love", "friend dating",
+    "brunch", "happy hour trivia", "trivia night", "karaoke", "open mic",
+    "dance", "ballet", "house jam", "concert", "gaming night", "book club",
+    "tarot", "astrology", "reiki", "wellness circle", "halloween",
 ]
 
 REFRESH_HOUR = 6          # 6am
@@ -271,18 +286,23 @@ def _classify(location):
     """Decide which box a discovered event belongs in."""
     loc = (location or "").lower()
     if any(w in loc for w in ("philadelphia", "philly", "king of prussia",
-                              "conshohocken", "malvern", "wayne, pa", "chester")):
+                              "conshohocken", "malvern", "wayne, pa", "chester",
+                              "downingtown", "exton", "radnor", "bala cynwyd",
+                              "navy yard", "university city", "sep")):
         return "philadelphia"
     if any(w in loc for w in ("new york", "nyc", "brooklyn", "manhattan",
                               "new jersey", ", nj", "newark", "jersey city",
                               "princeton", "delaware", ", de", "wilmington")):
         return "tristate"
+    # Pittsburgh, Bethlehem, Erie and the rest of PA are a drive away, not local.
     return "usa"
 
 
 def _interesting(text):
     """Whole-word match. Substring matching turns 'Braiding' into an AI event."""
     low = (text or "").lower()
+    if any(re.search(r"\b" + re.escape(k) + r"\b", low) for k in EXCLUDE_KEYWORDS):
+        return False
     return any(re.search(r"\b" + re.escape(k) + r"\b", low) for k in INTEREST_KEYWORDS)
 
 
@@ -381,12 +401,13 @@ def fetch_luma(city_slug, city_label):
     return out
 
 
-def fetch_generic(url, source_name, city_label):
-    """Try any events page that publishes JSON-LD. Used for Eventbrite/Meetup.
+def fetch_generic(url, source_name, city_label, organizer="", trusted=False,
+                  meant_for=""):
+    """Any events page that publishes JSON-LD (The Events Calendar, schema.org).
 
-    Both of those actively block automated requests, so this usually returns
-    nothing. It is kept because it costs nothing and occasionally works from a
-    home IP, and because the same function serves any other site you add.
+    trusted=True skips the keyword filter. Use it for organisations whose whole
+    programme is relevant — everything TiE or Ben Franklin runs is a startup or
+    tech event, so filtering them by keyword would only throw away good rows.
     """
     page = requests.get(url, headers={"User-Agent": UA, "Accept-Language": "en-US"},
                         timeout=25)
@@ -395,26 +416,58 @@ def fetch_generic(url, source_name, city_label):
     for blob in _json_blobs(page.text):
         _walk_json(blob, found)
     out = []
+    seen = set()
     for node in found:
         name = html.unescape(str(node.get("name") or "")).strip()
-        if not name:
+        if not name or name.lower() in seen:
             continue
         start = str(node.get("startDate") or node.get("start_date") or "")
         iso = start[:10] if re.match(r"\d{4}-\d{2}-\d{2}", start) else ""
         location = _location_of(node) or city_label
-        if not _interesting(f"{name} {location}"):
+        if not trusted and not _interesting(f"{name} {location}"):
             continue
+        seen.add(name.lower())
         link = _event_url(node, base=re.match(r"https?://[^/]+", url).group(0))
         out.append({
-            "date": iso, "sort_date": iso, "company": "", "event": name,
-            "location": location, "meant_for": "",
+            "date": iso, "sort_date": iso, "company": organizer, "event": name,
+            "location": location, "meant_for": meant_for,
             "register_url": link or url,
             "source": source_name,
         })
+    print(f"[events] {source_name}: {len(found)} objects, {len(out)} kept")
     return out
 
 
+def fetch_tie_philadelphia():
+    """TiE Philadelphia.
+
+    Their calendar runs on Zoho Backstage (an Ember app), so the listing is
+    drawn in the browser and the HTML we receive is empty. We try the chapter
+    site anyway in case they post events on a normal page, and the pinned
+    bookmark row below guarantees a one-click route to the calendar either way.
+    """
+    results = []
+    for url in ("https://philadelphia.tie.org/calendar/",
+                "https://philadelphia.tie.org/"):
+        try:
+            results += fetch_generic(url, "tie", "Philadelphia, PA",
+                                     organizer="TiE Philadelphia", trusted=True,
+                                     meant_for="Startup / entrepreneurship")
+        except Exception as exc:
+            print(f"[events] tie {url}: {str(exc)[:60]}")
+    return results
+
+
 SOURCES = [
+    ("TiE Philadelphia",  fetch_tie_philadelphia),
+    ("Ben Franklin (PA)", lambda: fetch_generic(
+        "https://benfranklin.org/events/", "benfranklin", "Pennsylvania",
+        organizer="Ben Franklin Technology Partners", trusted=True,
+        meant_for="Startup / entrepreneurship")),
+    ("Ben Franklin SEP",  lambda: fetch_generic(
+        "https://www.sep.benfranklin.org/resources/events/", "benfranklin",
+        "Philadelphia, PA", organizer="Ben Franklin Technology Partners, SEP",
+        trusted=True, meant_for="Startup / entrepreneurship")),
     ("Luma Philadelphia", lambda: fetch_luma("philadelphia", "Philadelphia, PA")),
     ("Luma New York",     lambda: fetch_luma("nyc", "New York, NY")),
     ("Eventbrite Philly", lambda: fetch_generic(
@@ -423,6 +476,23 @@ SOURCES = [
     ("Meetup Philly",     lambda: fetch_generic(
         "https://www.meetup.com/find/?keywords=technology&location=us--pa--Philadelphia",
         "meetup", "Philadelphia, PA")),
+]
+
+# Permanent rows linking to calendars we cannot scrape reliably. Recreated on
+# every refresh if you delete them, so the link is always one click away.
+BOOKMARKS = [
+    {"category": "philadelphia", "company": "TiE Philadelphia",
+     "event": "TiE Philadelphia — full event calendar",
+     "location": "Philadelphia, PA", "meant_for": "Startup / entrepreneurship",
+     "register_url": "https://philadelphia.tie.org/calendar/"},
+    {"category": "usa", "company": "TiE Global",
+     "event": "TiE Global — all chapters",
+     "location": "Nationwide", "meant_for": "Startup / entrepreneurship",
+     "register_url": "https://events.tie.org/events"},
+    {"category": "philadelphia", "company": "Ben Franklin Technology Partners, SEP",
+     "event": "Ben Franklin SEP — ecosystem events",
+     "location": "Philadelphia, PA", "meant_for": "Startup / entrepreneurship",
+     "register_url": "https://www.sep.benfranklin.org/resources/events/"},
 ]
 
 
@@ -452,13 +522,27 @@ def refresh(log=print):
         existing = all_events()
         known = {_key(r) for r in existing}
         added = 0
+
+        # Standing links first, so they exist even if every source fails.
+        for mark in BOOKMARKS:
+            row = dict(mark, date="Ongoing — check calendar", sort_date="",
+                       source="bookmark")
+            if _key(row) in known:
+                continue
+            known.add(_key(row))
+            existing.append(dict(row, event_id=uuid.uuid4().hex[:8],
+                                 interested=False, notes=""))
+            added += 1
+
         for item in discovered:
             if _key(item) in known:
                 continue
             known.add(_key(item))
+            # A named organiser is a better classifier than a vague venue string.
+            category = _classify(f"{item['location']} {item.get('company', '')}")
             existing.append({
                 "event_id": uuid.uuid4().hex[:8],
-                "category": _classify(item["location"]),
+                "category": category,
                 "date": item["date"], "sort_date": item["sort_date"],
                 "company": item["company"], "event": item["event"],
                 "location": item["location"], "meant_for": item["meant_for"],
