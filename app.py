@@ -508,6 +508,12 @@ def crm_restore():
     store.restore_backup()
     return redirect(url_for("crm_page", sheet=request.form.get("sheet", "")))
 
+@app.route("/crm/done/<int:excel_row>", methods=["POST"])
+def crm_done(excel_row):
+    sheet = request.form.get("sheet", "")
+    if sheet:
+        crm.dismiss(sheet, excel_row)
+    return redirect(url_for("crm_page", sheet=sheet))
 
 @app.route("/crm/add", methods=["POST"])
 def crm_add():
@@ -619,6 +625,9 @@ STYLE = """
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
+
+.donebtn:hover { background: var(--green-soft); color:#15803d; border-color:#b7e0c4; }
+  
     /* ============================================================
        BRAND PALETTE - change these five lines to re-theme the app
        ============================================================ */
@@ -1452,11 +1461,17 @@ CRM_PAGE = """
         <div class="boxscroll">
           {% for s in suggestions %}
             <div class="sugg p-{{ s.priority }}">
-              <div>
+              <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
                 <span class="who">{{ s.who }}</span>
                 {% if s.org %}<span class="org">&middot; {{ s.org }}</span>{% endif %}
                 <span class="pill pill-{{ s.priority }}">{{ s.priority }}</span>
                 {% if s.stale %}<span class="pill pill-stale">notes changed</span>{% endif %}
+                <form class="inline" method="post" action="/crm/done/{{ s.row }}"
+                      style="margin-left:auto;">
+                  <input type="hidden" name="sheet" value="{{ sheet }}">
+                  <button class="btn btn-sm btn-ghost donebtn" type="submit"
+                          title="Mark done and remove from this list">&#10003; Done</button>
+                </form>
               </div>
               <div class="action">{{ s.action }}</div>
               {% if s.timing %}<div class="timing">&#8986; {{ s.timing }}</div>{% endif %}

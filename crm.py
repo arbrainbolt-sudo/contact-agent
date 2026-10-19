@@ -1,4 +1,5 @@
 """Reads CRM activity notes and suggests the next action for each row."""
+
 import re
 import hashlib
 from datetime import datetime
@@ -11,6 +12,7 @@ SUGGESTION_FIELDS = ["sheet", "row", "who", "org", "activity_hash",
 
 PRIORITIES = ("high", "medium", "low")
 MAX_ROWS_PER_CALL = 25
+
 
 # ---------------------------------------------------------------- date parsing
 
@@ -27,7 +29,7 @@ YEAR_LINE_RE = re.compile(r"^\s*(19|20)\d{2}\s*$")
 # a 4-digit year anywhere, for lines like "--- 2025 ---"
 YEAR_ANY_RE = re.compile(r"\b((?:19|20)\d{2})\b")
 
-# "July 7", "Sep 12", "Aug 15th", "Dec 3," — month name then day
+# "July 7", "Sep 12", "Aug 15th", "Dec 3," - month name then day
 MONTH_DAY_RE = re.compile(
     r"^\s*[-•*>\s]*"                                  # optional bullet
     r"([A-Za-z]{3,9})\.?\s+"                          # month name
@@ -67,7 +69,7 @@ def last_activity_date(text, default_year=None):
 
         month = MONTHS.get(m.group(1).lower())
         if not month:
-            continue                       # e.g. "Meeting 7 - ..." — not a month
+            continue                       # e.g. "Meeting 7 - ..." - not a month
 
         day = int(m.group(2))
         this_year = int(m.group(3)) if m.group(3) else year
@@ -88,6 +90,8 @@ def last_activity_date(text, default_year=None):
             best_line = line
 
     return best, best_line
+
+
 def activity_hash(text):
     return hashlib.sha1((text or "").strip().encode("utf-8")).hexdigest()[:12]
 
@@ -115,6 +119,25 @@ def save(sheet, new_rows):
     store.write_sheet(store.CRM_SUGGESTIONS_SHEET, SUGGESTION_FIELDS, kept + new_rows)
 
 
+def dismiss(sheet, excel_row):
+    """Remove one suggestion - the Done button. True if something was removed."""
+    existing = store.read_sheet(store.CRM_SUGGESTIONS_SHEET, SUGGESTION_FIELDS)
+    kept = [r for r in existing
+            if not (r.get("sheet") == sheet and str(r.get("row")) == str(excel_row))]
+    if len(kept) == len(existing):
+        return False
+    store.write_sheet(store.CRM_SUGGESTIONS_SHEET, SUGGESTION_FIELDS, kept)
+    return True
+
+
+def dismiss_all(sheet):
+    """Clear every suggestion for one worksheet."""
+    existing = store.read_sheet(store.CRM_SUGGESTIONS_SHEET, SUGGESTION_FIELDS)
+    kept = [r for r in existing if r.get("sheet") != sheet]
+    store.write_sheet(store.CRM_SUGGESTIONS_SHEET, SUGGESTION_FIELDS, kept)
+    return len(existing) - len(kept)
+
+
 # ---------------------------------------------------------------- analysis
 
 def _chunk(items, size):
@@ -130,7 +153,7 @@ def analyze(sheet, rows, cols, log=print):
     last_col = cols.get("last", "")
 
     if not activity_col:
-        log("   no activity column found — nothing to analyse")
+        log("   no activity column found - nothing to analyse")
         return []
 
     candidates = []
@@ -177,7 +200,7 @@ Reply with ONLY a JSON object mapping each row number to an object:
 
 Rules:
 - action: one short imperative sentence, under 15 words. Be specific to what
-  the notes actually say — name the thing to send, ask or confirm.
+  the notes actually say - name the thing to send, ask or confirm.
 - priority: "high" if something was promised, a deadline is near, or the deal
   is stalling; "medium" for normal progression; "low" for nurture or no urgency.
 - timing: a short phrase like "this week", "overdue", "after their board meeting",
