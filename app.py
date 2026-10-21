@@ -134,7 +134,15 @@ def find_col(headers, hints, override="", exclude=()):
                 if test(hl, hint):
                     return h
     return ""
-
+def _sort_key(value):
+    """Numbers numerically, text alphabetically, blanks last."""
+    v = (value or "").strip()
+    if not v:
+        return (2, 0.0, "")
+    try:
+        return (0, float(v.replace(",", "").replace("$", "")), "")
+    except ValueError:
+        return (1, 0.0, v.lower())
 
 def crm_boxes(headers, rows):
     """Build the two summary panels shown above the CRM table."""
@@ -416,6 +424,25 @@ def crm_page():
                 if any(needle in (v or "").lower()
                        for k, v in r.items() if k != "_row")]
 
+    # --- sorting
+    sort = request.args.get("sort", "")
+    direction = request.args.get("dir", "asc")
+
+    serial_col = find_col(headers, ("s#", "s #", "sr", "serial", "no.", "#", "id"), "")
+    sortable = [
+        ("S#", serial_col or "_row"),
+        ("Company", boxes["cols"]["company"]),
+        ("Name", boxes["cols"]["name"]),
+    ]
+    sortable = [(label, col) for label, col in sortable if col]
+
+    if sort == "_row":
+        rows = sorted(rows, key=lambda r: r.get("_row", 0),
+                      reverse=(direction == "desc"))
+    elif sort and sort in headers:
+        rows = sorted(rows, key=lambda r: _sort_key(r.get(sort, "")),
+                      reverse=(direction == "desc"))
+
     return render_template_string(
         CRM_PAGE,
         sheets=sheets,
@@ -435,6 +462,9 @@ def crm_page():
         notify_status=notify.status_line(),
         tab="crm",
         state=crm_state,
+        sortable=sortable,
+        sort=sort,
+        direction=direction,
     )
 
 
@@ -1062,6 +1092,17 @@ STYLE = """
       font-size: 11.5px; color: var(--ink-faint); margin-left: 6px;
       background: var(--line-soft); padding: 2px 8px; border-radius: 4px;
     }
+
+        .sortbar { margin-left:auto; display:flex; align-items:center; gap:6px; }
+    .sortlabel { font-size:11px; font-weight:600; letter-spacing:.05em;
+                 text-transform:uppercase; color:var(--ink-faint); margin-right:2px; }
+    .sortbtn { font-size:12.5px; font-weight:500; text-decoration:none; color:var(--ink-soft);
+               background:var(--surface); border:1px solid var(--line); border-radius:99px;
+               padding:5px 13px; transition:all .13s; white-space:nowrap; }
+    .sortbtn:hover { border-color:var(--accent); color:var(--accent-dark); background:var(--accent-soft); }
+    .sortbtn.on { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
+    .sortbtn.clear { color:var(--ink-faint); border-style:dashed; }
+    
   </style>
 """
 
@@ -1614,6 +1655,22 @@ CRM_PAGE = """
     {% if hidden_count %}
       <span class="hiddennote">{{ hidden_count }} column{% if hidden_count != 1 %}s{% endif %} hidden</span>
     {% endif %}
+
+    <span class="sortbar">
+      <span class="sortlabel">Sort</span>
+      {% for label, col in sortable %}
+        {% set active = (sort == col) %}
+        {% set nextdir = 'desc' if (active and direction == 'asc') else 'asc' %}
+        <a class="sortbtn {% if active %}on{% endif %}"
+           href="/crm?sheet={{ sheet }}{% if q %}&q={{ q }}{% endif %}&sort={{ col }}&dir={{ nextdir }}">
+          {{ label }}{% if active %} {% if direction == 'asc' %}&uarr;{% else %}&darr;{% endif %}{% endif %}
+        </a>
+      {% endfor %}
+      {% if sort %}
+        <a class="sortbtn clear"
+           href="/crm?sheet={{ sheet }}{% if q %}&q={{ q }}{% endif %}">clear</a>
+      {% endif %}
+    </span>
   </div>
 
   {% if columns %}
