@@ -32,6 +32,9 @@ CRM_STALE_DAYS = int(os.getenv("CRM_STALE_DAYS", "30"))     # "needs reconnectin
 CRM_WIDE_COL = os.getenv("CRM_WIDE_COL", "activity")        # wide, editable column
 CRM_ACTIVITY_COL = os.getenv("CRM_ACTIVITY_COL", "")        # blank = use CRM_WIDE_COL
 CRM_MAX_COLS = int(os.getenv("CRM_MAX_COLS", "6"))          # hide columns 7 onwards
+CRM_HIDE_COLS = {1}                    # column numbers never shown on the page
+CRM_SNO_COL = 2                        # which column holds the serial number
+CRM_COL_LABELS = {2: "S.No."}          # display-only header overrides
 LINKEDIN_TIME = os.getenv("LINKEDIN_TIME", "07:00")         # daily post, 24h clock
 
 
@@ -410,12 +413,29 @@ def crm_page():
     boxes = crm_boxes(headers, all_rows)
     suggestions = crm.merge(all_rows, boxes["cols"], sheet)
 
-    all_cols = [(i + 1, h) for i, h in enumerate(headers)]
+    # each entry is (excel column number, real header key, display label)
+    all_cols = [(i + 1, h, CRM_COL_LABELS.get(i + 1, h))
+                for i, h in enumerate(headers)
+                if (i + 1) not in CRM_HIDE_COLS]
+
     columns = all_cols[:CRM_MAX_COLS]
     wide = (boxes["cols"]["activity"] or CRM_WIDE_COL).strip().lower()
     for col in all_cols[CRM_MAX_COLS:]:
         if wide and wide == col[1].strip().lower():
             columns.append(col)
+
+    # next serial number for the add row
+    sno_key = headers[CRM_SNO_COL - 1] if len(headers) >= CRM_SNO_COL else ""
+    next_sno = ""
+    if sno_key:
+        nums = []
+        for r in all_rows:
+            raw = (r.get(sno_key, "") or "").strip()
+            try:
+                nums.append(int(float(raw)))
+            except ValueError:
+                continue
+        next_sno = str(max(nums) + 1) if nums else "1"
 
     rows = all_rows
     if q:
@@ -428,9 +448,8 @@ def crm_page():
     sort = request.args.get("sort", "")
     direction = request.args.get("dir", "asc")
 
-    serial_col = find_col(headers, ("s#", "s #", "sr", "serial", "no.", "#", "id"), "")
     sortable = [
-        ("S#", serial_col or "_row"),
+        ("S.No.", sno_key or "_row"),
         ("Company", boxes["cols"]["company"]),
         ("Name", boxes["cols"]["name"]),
     ]
@@ -465,6 +484,8 @@ def crm_page():
         sortable=sortable,
         sort=sort,
         direction=direction,
+        next_sno=next_sno,
+        sno_col=CRM_SNO_COL,
     )
 
 
@@ -1102,7 +1123,7 @@ STYLE = """
     .sortbtn:hover { border-color:var(--accent); color:var(--accent-dark); background:var(--accent-soft); }
     .sortbtn.on { background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600; }
     .sortbtn.clear { color:var(--ink-faint); border-style:dashed; }
-    
+
   </style>
 """
 
@@ -1678,8 +1699,8 @@ CRM_PAGE = """
       <table>
         <thead>
           <tr>
-            {% for col_num, h in columns %}
-              <th class="{% if wide_col and wide_col == h.lower() %}wide4{% endif %}">{{ h }}</th>
+            {% for col_num, key, label in columns %}
+              <th class="{% if wide_col and wide_col == key.lower() %}wide4{% endif %}">{{ label }}</th>
             {% endfor %}
           </tr>
         </thead>
@@ -1690,12 +1711,15 @@ CRM_PAGE = """
               <form method="post" action="/crm/add" id="addform">
                 <input type="hidden" name="sheet" value="{{ sheet }}">
               </form>
-              {% for col_num, h in columns %}
-                <td class="{% if wide_col and wide_col == h.lower() %}wide4{% endif %}">
-                  {% if wide_col and wide_col == h.lower() %}
-                    <textarea form="addform" name="col_{{ col_num }}" rows="3" placeholder="{{ h }}..."></textarea>
+              {% for col_num, key, label in columns %}
+                <td class="{% if wide_col and wide_col == key.lower() %}wide4{% endif %}">
+                  {% if wide_col and wide_col == key.lower() %}
+                    <textarea form="addform" name="col_{{ col_num }}" rows="3" placeholder="{{ label }}..."></textarea>
+                  {% elif col_num == sno_col %}
+                    <input form="addform" type="text" name="col_{{ col_num }}"
+                           value="{{ next_sno }}" placeholder="{{ label }}">
                   {% else %}
-                    <input form="addform" type="text" name="col_{{ col_num }}" placeholder="{{ h }}">
+                    <input form="addform" type="text" name="col_{{ col_num }}" placeholder="{{ label }}">
                   {% endif %}
                 </td>
               {% endfor %}
@@ -1710,9 +1734,9 @@ CRM_PAGE = """
 
           {% for row in rows %}
             <tr>
-              {% for col_num, h in columns %}
-                {% set value = row.get(h, '') %}
-                {% if wide_col and wide_col == h.lower() %}
+              {% for col_num, key, label in columns %}
+                {% set value = row.get(key, '') %}
+                {% if wide_col and wide_col == key.lower() %}
                   <td class="wide4">
                     <form class="cellform" method="post" action="/crm/edit">
                       <input type="hidden" name="sheet" value="{{ sheet }}">
