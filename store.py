@@ -17,10 +17,13 @@ LATEST_NEWS_SHEET = "LatestNews"
 SAVED_NEWS_SHEET = "SavedNews"
 CRM_SUGGESTIONS_SHEET = "CrmSuggestions"
 LINKEDIN_SHEET = "LinkedInPosts"
+YOUTUBE_VIDEOS_SHEET = "YouTubeVideos"
+YOUTUBE_CHANNEL_SHEET = "YouTubeChannel"
 
 # Sheets the app manages itself. Anything else in the workbook is yours.
 MANAGED_SHEETS = {CONTACTS_SHEET, LATEST_NEWS_SHEET, SAVED_NEWS_SHEET,
-                  CRM_SUGGESTIONS_SHEET, LINKEDIN_SHEET}
+                  CRM_SUGGESTIONS_SHEET, LINKEDIN_SHEET,
+                  YOUTUBE_VIDEOS_SHEET, YOUTUBE_CHANNEL_SHEET}
 
 _lock = threading.Lock()
 

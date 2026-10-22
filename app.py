@@ -15,6 +15,7 @@ import linkedin
 import news
 import notify
 import store
+import youtube
 
 app = Flask(__name__)
 app.register_blueprint(events_bp)
@@ -22,6 +23,7 @@ app.register_blueprint(events_bp)
 state = {"running": False, "target": "", "country": "", "log": []}
 news_state = {"running": False, "log": [], "last_run": "", "last_run_ts": 0.0}
 crm_state = {"running": False, "log": [], "last_run": "", "sheet": ""}
+yt_state = {"running": False, "log": [], "last_run": ""}
 li_state = {"running": False, "log": [], "last_run": ""}
 
 NO_COMPANY = "__blank__"
@@ -35,7 +37,8 @@ CRM_MAX_COLS = int(os.getenv("CRM_MAX_COLS", "6"))          # hide columns 7 onw
 CRM_HIDE_COLS = {1}                    # column numbers never shown on the page
 CRM_SNO_COL = 2                        # which column holds the serial number
 CRM_COL_LABELS = {2: "S.No."}          # display-only header overrides
-LINKEDIN_TIME = os.getenv("LINKEDIN_TIME", "07:00")         # daily post, 24h clock
+LINKEDIN_TIME = os.getenv("LINKEDIN_TIME", "07:00")
+YOUTUBE_TIME = os.getenv("YOUTUBE_TIME", "07:15")           # daily stats refresh         # daily post, 24h clock
 
 
 # ---------------------------------------------------------------- helpers
@@ -298,6 +301,30 @@ def start_li_run(force=False):
     return True
 
 
+def yt_log(message):
+    print(message)
+    yt_state["log"].append(message)
+
+
+def yt_worker():
+    try:
+        youtube.refresh(log=yt_log)
+        yt_state["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    except Exception as e:
+        yt_log(f"ERROR: {e}")
+    finally:
+        yt_state["running"] = False
+
+
+def start_yt_run():
+    if yt_state["running"]:
+        return False
+    yt_state["running"] = True
+    yt_state["log"] = []
+    threading.Thread(target=yt_worker, daemon=True).start()
+    return True
+
+
 def crm_worker(sheet):
     try:
         headers, rows = store.read_sheet_auto(sheet)
@@ -333,6 +360,7 @@ def scheduler():
     """Daily jobs: the news digest and the LinkedIn post."""
     news_done = None
     li_done = None
+    yt_done = None
     while True:
         clock = datetime.now().strftime("%H:%M")
         today = date.today()
@@ -346,6 +374,11 @@ def scheduler():
             li_done = today
             print(f"[scheduler] daily LinkedIn post at {LINKEDIN_TIME}")
             start_li_run(force=True)
+
+        if clock == YOUTUBE_TIME and yt_done != today:
+            yt_done = today
+            print(f"[scheduler] daily YouTube refresh at {YOUTUBE_TIME}")
+            start_yt_run()
 
         time.sleep(30)
 
@@ -511,6 +544,46 @@ def crm_edit():
     if sheet and excel_row and col:
         store.update_cell(sheet, excel_row, col, request.form.get("value", "").strip())
     return redirect(url_for("crm_page", sheet=sheet, q=request.form.get("q", "") or None))
+
+
+@app.route("/youtube")
+def youtube_page():
+    rows = youtube.decorate(youtube.videos())
+    sort = request.args.get("sort", "published")
+    direction = request.args.get("dir", "desc")
+
+    keys = {
+        "published": lambda r: r.get("published_raw", ""),
+        "views": lambda r: r.get("views_n", 0),
+        "likes": lambda r: r.get("likes_n", 0),
+        "comments": lambda r: r.get("comments_n", 0),
+        "engagement": lambda r: r.get("engagement", 0),
+        "title": lambda r: (r.get("title") or "").lower(),
+    }
+    if sort in keys:
+        rows = sorted(rows, key=keys[sort], reverse=(direction == "desc"))
+
+    return render_template_string(
+        YOUTUBE_PAGE,
+        rows=rows,
+        chan=youtube.channel(),
+        totals=youtube.totals(rows),
+        sort=sort,
+        direction=direction,
+        channel_url=youtube.CHANNEL_URL,
+        yt_status=youtube.status_line(),
+        refresh_time=YOUTUBE_TIME,
+        has_logo=logo_exists(),
+        notify_status=notify.status_line(),
+        tab="youtube",
+        state=yt_state,
+    )
+
+
+@app.route("/youtube/run", methods=["POST"])
+def youtube_run():
+    start_yt_run()
+    return redirect(url_for("youtube_page"))
 
 
 @app.route("/linkedin")
@@ -1102,6 +1175,48 @@ STYLE = """
 
     .copybtn.done { background: var(--green); border-color: var(--green); color:#fff; }
 
+
+    /* ---------------------------------------------------- YouTube page */
+    .tilerow { display:grid; grid-template-columns: repeat(auto-fit, minmax(160px,1fr));
+               gap:14px; margin-top:22px; }
+    .tile { background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+            box-shadow:var(--shadow); padding:16px 18px; }
+    .tile .k { font-size:11px; font-weight:600; letter-spacing:.055em; text-transform:uppercase;
+               color:var(--ink-faint); margin-bottom:6px; }
+    .tile .v { font-size:25px; font-weight:700; color:var(--brand); letter-spacing:-0.5px;
+               line-height:1.1; font-variant-numeric:tabular-nums; }
+    .tile .s { font-size:11.5px; color:var(--ink-faint); margin-top:4px; }
+    .tile.accent .v { color:var(--accent-dark); }
+
+    .chanbar { display:flex; align-items:center; gap:16px; margin-top:22px;
+               background:var(--surface); border:1px solid var(--line);
+               border-radius:var(--radius); box-shadow:var(--shadow); padding:16px 20px; }
+    .chanbar img { width:58px; height:58px; border-radius:50%; object-fit:cover; flex-shrink:0; }
+    .chanbar .nm { font-size:17px; font-weight:650; color:var(--brand); }
+    .chanbar .hd { font-size:12.5px; color:var(--ink-faint); margin-top:2px; }
+
+    .thumb { width:132px; height:74px; object-fit:cover; border-radius:6px;
+             border:1px solid var(--line); display:block; }
+    .vidtitle { font-size:14px; font-weight:600; color:var(--brand); line-height:1.4;
+                text-decoration:none; display:block; }
+    .vidtitle:hover { color:var(--accent-dark); text-decoration:underline; }
+    .vidmeta { font-size:11.5px; color:var(--ink-faint); margin-top:5px; }
+    .num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .num b { font-size:14px; font-weight:650; }
+    .engage { font-weight:650; font-variant-numeric:tabular-nums; }
+    .eng-hi { color:#15803d; }
+    .eng-mid { color:var(--amber); }
+    .eng-lo { color:var(--ink-faint); }
+    th.sortable a { color:inherit; text-decoration:none; }
+    th.sortable a:hover { color:var(--accent-dark); }
+    th.sortable.on a { color:var(--accent-dark); }
+    .setupbox { background:var(--amber-soft); border:1px solid #ecd9a4; border-left:4px solid var(--amber);
+                border-radius:8px; padding:18px 22px; margin-top:22px; color:#6b4f12; }
+    .setupbox h3 { margin:0 0 10px; font-size:15px; color:#7c5b13; }
+    .setupbox ol { margin:0; padding-left:20px; font-size:13.5px; line-height:1.9; }
+    .setupbox code { background:rgba(0,0,0,.07); padding:2px 6px; border-radius:4px;
+                     font-family:ui-monospace,Menlo,monospace; font-size:12.5px; }
+
     /* ---------------------------------------------------- CRM add row */
     .addrow { background: var(--accent-soft); }
     .addrow td { padding: 10px 12px; }
@@ -1144,6 +1259,7 @@ HEADER = """
         <a href="/news" class="{% if tab == 'news' %}on{% endif %}">AI News</a>
         <a href="/crm" class="{% if tab == 'crm' %}on{% endif %}">CRM</a>
         <a href="/linkedin" class="{% if tab == 'linkedin' %}on{% endif %}">LinkedIn Post</a>
+        <a href="/youtube" class="{% if tab == 'youtube' %}on{% endif %}">YouTube</a>
         <a href="/events">Events</a>
       </nav>
 
@@ -1988,6 +2104,191 @@ LINKEDIN_PAGE = """
       });
     }
   </script>
+
+</div>
+</body>
+</html>
+"""
+
+
+YOUTUBE_PAGE = """
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Hire2o - YouTube</title>
+  {% if state.running %}<meta http-equiv="refresh" content="4">{% endif %}
+""" + STYLE + """
+</head>
+<body>
+""" + HEADER + """
+<div class="shell">
+
+  <div class="panel panel-pad searchbar">
+    <form method="post" action="/youtube/run">
+      <div class="searchrow" style="justify-content:space-between;">
+        <div style="display:flex; gap:9px; align-items:center;">
+          <button class="btn btn-primary" type="submit" {% if state.running %}disabled{% endif %}>
+            {% if state.running %}Refreshing...{% else %}&#8635; Refresh stats{% endif %}
+          </button>
+          <a class="btn btn-ghost" href="{{ channel_url }}" target="_blank" rel="noopener noreferrer">
+            Open channel &#8599;
+          </a>
+        </div>
+        <div class="counts">
+          Auto-refreshes daily at <b>{{ refresh_time }}</b>
+          {% if state.last_run %} &middot; last run {{ state.last_run }}
+          {% elif chan.fetched_at %} &middot; data from {{ chan.fetched_at }}{% endif %}
+        </div>
+      </div>
+    </form>
+  </div>
+
+  {% if state.running %}
+    <div class="banner">
+      <span class="pulse"></span>
+      <span>Reading the channel and every video - this page refreshes every 4 seconds.</span>
+    </div>
+  {% endif %}
+
+  {% if state.log %}
+    <div class="log" style="height:130px;">{% for line in state.log %}{{ line }}
+{% endfor %}</div>
+  {% endif %}
+
+  {% if yt_status != 'ready' %}
+    <div class="setupbox">
+      <h3>&#128273; One-time setup - YouTube API key ({{ yt_status }})</h3>
+      <ol>
+        <li>Go to <b>console.cloud.google.com</b> and sign in with your Google account.</li>
+        <li>Create a project (any name), then open <b>APIs &amp; Services &rarr; Library</b>.</li>
+        <li>Search <b>YouTube Data API v3</b> and press <b>Enable</b>.</li>
+        <li>Open <b>Credentials &rarr; Create credentials &rarr; API key</b>, and copy the key.</li>
+        <li>Add this line to your <code>.env</code> file, then restart the app:<br>
+            <code>YOUTUBE_API_KEY=AIza...your-key...</code></li>
+      </ol>
+      <p style="margin:12px 0 0; font-size:12.5px;">
+        Free, no card needed. A full refresh costs about 3 units of the 10,000 daily quota.
+      </p>
+    </div>
+  {% endif %}
+
+  {% if chan.title %}
+    <div class="chanbar">
+      {% if chan.thumbnail %}<img src="{{ chan.thumbnail }}" alt="">{% endif %}
+      <div>
+        <div class="nm">{{ chan.title }}</div>
+        <div class="hd">
+          {% if chan.handle %}{{ chan.handle }} &middot; {% endif %}
+          {{ '{:,}'.format(chan.subscribers|int) }} subscribers &middot;
+          {{ chan.video_count }} videos
+        </div>
+      </div>
+      <a class="btn btn-sm" style="margin-left:auto;" href="{{ channel_url }}"
+         target="_blank" rel="noopener noreferrer">View on YouTube &#8599;</a>
+    </div>
+  {% endif %}
+
+  {% if rows %}
+    <div class="tilerow">
+      <div class="tile">
+        <div class="k">Videos</div>
+        <div class="v">{{ totals.videos }}</div>
+      </div>
+      <div class="tile accent">
+        <div class="k">Total views</div>
+        <div class="v">{{ totals.views_fmt }}</div>
+        <div class="s">{{ totals.avg_views }} average</div>
+      </div>
+      <div class="tile">
+        <div class="k">Likes</div>
+        <div class="v">{{ totals.likes_fmt }}</div>
+      </div>
+      <div class="tile">
+        <div class="k">Comments</div>
+        <div class="v">{{ totals.comments_fmt }}</div>
+      </div>
+      <div class="tile">
+        <div class="k">Engagement</div>
+        <div class="v">{{ totals.engagement }}%</div>
+        <div class="s">likes + comments / views</div>
+      </div>
+    </div>
+
+    <div class="sectionhead">
+      <h2>Videos</h2>
+      <span class="counts">{{ rows|length }} published &middot; click a column to sort</span>
+    </div>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="width:148px;"></th>
+            {% set cols = [('title','Video','left'), ('published','Published','left'),
+                           ('views','Views','right'), ('likes','Likes','right'),
+                           ('comments','Comments','right'), ('engagement','Engagement','right')] %}
+            {% for key, label, align in cols %}
+              {% set active = (sort == key) %}
+              {% set nextdir = 'asc' if (active and direction == 'desc') else 'desc' %}
+              <th class="sortable {% if active %}on{% endif %}"
+                  style="text-align:{{ align }};">
+                <a href="/youtube?sort={{ key }}&dir={{ nextdir }}">
+                  {{ label }}{% if active %} {% if direction == 'desc' %}&darr;{% else %}&uarr;{% endif %}{% endif %}
+                </a>
+              </th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for v in rows %}
+            <tr>
+              <td>
+                <a href="{{ v.url }}" target="_blank" rel="noopener noreferrer">
+                  {% if v.thumbnail %}<img class="thumb" src="{{ v.thumbnail }}" alt="">{% endif %}
+                </a>
+              </td>
+              <td style="min-width:300px; max-width:430px;">
+                <a class="vidtitle" href="{{ v.url }}" target="_blank" rel="noopener noreferrer">{{ v.title }}</a>
+                <div class="vidmeta">
+                  {% if v.duration %}{{ v.duration }}{% endif %}
+                  {% if v.privacy and v.privacy != 'public' %}
+                    &middot; <span class="pill pill-cold">{{ v.privacy }}</span>
+                  {% endif %}
+                  {% if v.views_per_day %} &middot; {{ v.views_per_day }} views/day{% endif %}
+                </div>
+              </td>
+              <td class="datecell">
+                {{ v.published }}
+                {% if v.age_days is not none %}
+                  <div class="vidmeta">{{ v.age_days }}d ago</div>
+                {% endif %}
+              </td>
+              <td class="num"><b>{{ v.views_fmt }}</b></td>
+              <td class="num">{{ v.likes_fmt }}</td>
+              <td class="num">{{ v.comments_fmt }}</td>
+              <td class="num">
+                <span class="engage {% if v.engagement >= 5 %}eng-hi{% elif v.engagement >= 2 %}eng-mid{% else %}eng-lo{% endif %}">
+                  {{ v.engagement }}%
+                </span>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    <p class="muted" style="font-size:12.5px; margin-top:14px;">
+      Cached in <b>results.xlsx</b> on the <b>YouTubeVideos</b> sheet.
+      Engagement is (likes + comments) &divide; views - green above 5%, amber above 2%.
+    </p>
+
+  {% elif yt_status == 'ready' %}
+    <div class="panel empty">
+      <div class="big">&#127909;</div>
+      <p>No videos cached yet. Press <b>Refresh stats</b> to pull them from YouTube.</p>
+    </div>
+  {% endif %}
 
 </div>
 </body>
