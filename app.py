@@ -1251,7 +1251,6 @@ HEADER = """
         {% else %}
           <span class="name">Hire2o</span>
         {% endif %}
-        <span class="sub">Workbench</span>
       </a>
 
       <nav class="nav">
@@ -1260,7 +1259,7 @@ HEADER = """
         <a href="/crm" class="{% if tab == 'crm' %}on{% endif %}">CRM</a>
         <a href="/linkedin" class="{% if tab == 'linkedin' %}on{% endif %}">LinkedIn Post</a>
         <a href="/youtube" class="{% if tab == 'youtube' %}on{% endif %}">YouTube</a>
-        <a href="/events">Events</a>
+        <a href="/events" class="{% if tab == 'events' %}on{% endif %}">Events</a>
       </nav>
 
       <div class="spacer"></div>

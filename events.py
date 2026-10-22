@@ -745,12 +745,12 @@ PAGE = """
       {% endif %}
     </span>
     <span class="vr"></span>
-    <span class="appname">Workbench</span>
     <nav class="tabs">
       <a href="/">Contacts</a>
       <a href="/news">AI News</a>
       <a href="/crm">CRM</a>
       <a href="/linkedin">LinkedIn Post</a>
+              <a href="/youtube">YouTube</a>
       <a class="on" href="/events">Events</a>
     </nav>
   </div>
