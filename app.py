@@ -15,6 +15,7 @@ import linkedin
 import news
 import notify
 import store
+import xcom
 import youtube
 
 app = Flask(__name__)
@@ -24,6 +25,7 @@ state = {"running": False, "target": "", "country": "", "log": []}
 news_state = {"running": False, "log": [], "last_run": "", "last_run_ts": 0.0}
 crm_state = {"running": False, "log": [], "last_run": "", "sheet": ""}
 yt_state = {"running": False, "log": [], "last_run": ""}
+x_state = {"running": False, "log": [], "last_run": ""}
 li_state = {"running": False, "log": [], "last_run": ""}
 
 NO_COMPANY = "__blank__"
@@ -301,6 +303,33 @@ def start_li_run(force=False):
     return True
 
 
+def x_log(message):
+    print(message)
+    x_state["log"].append(message)
+
+
+def x_worker(force=False):
+    try:
+        if force:
+            xcom.draft_all(log=x_log, force=True)
+        else:
+            xcom.refresh(log=x_log)
+        x_state["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    except Exception as e:
+        x_log(f"ERROR: {e}")
+    finally:
+        x_state["running"] = False
+
+
+def start_x_run(force=False):
+    if x_state["running"]:
+        return False
+    x_state["running"] = True
+    x_state["log"] = []
+    threading.Thread(target=x_worker, args=(force,), daemon=True).start()
+    return True
+
+
 def yt_log(message):
     print(message)
     yt_state["log"].append(message)
@@ -544,6 +573,56 @@ def crm_edit():
     if sheet and excel_row and col:
         store.update_cell(sheet, excel_row, col, request.form.get("value", "").strip())
     return redirect(url_for("crm_page", sheet=sheet, q=request.form.get("q", "") or None))
+
+
+@app.route("/x")
+def x_page():
+    return render_template_string(
+        X_PAGE,
+        posts=xcom.recent(),
+        total=len(xcom.all_posts()),
+        handle=xcom.HANDLE,
+        max_age=xcom.MAX_AGE_DAYS,
+        top_n=xcom.TOP_N,
+        api_ready=xcom.api_ready(),
+        x_status=xcom.status_line(),
+        setup=xcom.setup_notes(),
+        has_logo=logo_exists(),
+        notify_status=notify.status_line(),
+        tab="x",
+        state=x_state,
+    )
+
+
+@app.route("/x/run", methods=["POST"])
+def x_run():
+    start_x_run(force=request.form.get("force") == "1")
+    return redirect(url_for("x_page"))
+
+
+@app.route("/x/add", methods=["POST"])
+def x_add():
+    blob = request.form.get("bulk", "").strip()
+    if blob:
+        xcom.add_bulk(blob, log=x_log)
+    else:
+        url = request.form.get("url", "").strip()
+        text = request.form.get("text", "").strip()
+        if url or text:
+            xcom.add_post(url, text, log=x_log)
+    return redirect(url_for("x_page"))
+
+
+@app.route("/x/redraft/<post_id>", methods=["POST"])
+def x_redraft(post_id):
+    xcom.redraft_one(post_id, log=x_log)
+    return redirect(url_for("x_page"))
+
+
+@app.route("/x/delete/<post_id>", methods=["POST"])
+def x_delete(post_id):
+    xcom.delete_post(post_id)
+    return redirect(url_for("x_page"))
 
 
 @app.route("/youtube")
@@ -1217,6 +1296,33 @@ STYLE = """
     .setupbox code { background:rgba(0,0,0,.07); padding:2px 6px; border-radius:4px;
                      font-family:ui-monospace,Menlo,monospace; font-size:12.5px; }
 
+
+    /* ---------------------------------------------------- X page */
+    .xpost { background:var(--surface); border:1px solid var(--line);
+             border-radius:var(--radius); box-shadow:var(--shadow);
+             padding:18px 20px; margin-bottom:15px; }
+    .xhead { display:flex; align-items:center; gap:9px; margin-bottom:10px; flex-wrap:wrap; }
+    .xauthor { font-weight:650; font-size:14px; color:var(--brand); text-decoration:none; }
+    .xauthor:hover { color:var(--accent-dark); text-decoration:underline; }
+    .xage { font-size:12px; color:var(--ink-faint); }
+    .xmetrics { margin-left:auto; display:flex; gap:12px; font-size:12px;
+                color:var(--ink-faint); font-variant-numeric:tabular-nums; }
+    .xtext { font-size:14.5px; line-height:1.6; color:#2c3645; white-space:pre-wrap;
+             word-break:break-word; }
+    .xreply { margin-top:14px; padding:13px 15px; background:var(--accent-soft);
+              border-left:3px solid var(--accent); border-radius:0 8px 8px 0; }
+    .xreply .lbl { font-size:10.5px; font-weight:700; letter-spacing:.06em;
+                   text-transform:uppercase; color:var(--accent-dark); margin-bottom:5px; }
+    .xreply .body { font-size:14px; line-height:1.55; color:var(--ink); white-space:pre-wrap; }
+    .xreply .wc { font-size:11px; color:var(--ink-faint); margin-top:6px; }
+    .xnone { margin-top:12px; font-size:13px; color:var(--ink-faint); font-style:italic; }
+    .xactions { display:flex; gap:7px; margin-top:13px; padding-top:12px;
+                border-top:1px solid var(--line-soft); flex-wrap:wrap; }
+    .pastebox { width:100%; min-height:92px; font-family:inherit; font-size:13.5px;
+                line-height:1.5; padding:11px 13px; border:1px solid var(--line);
+                border-radius:8px; resize:vertical; }
+    .pastehint { font-size:12px; color:var(--ink-faint); margin:8px 0 0; line-height:1.6; }
+
     /* ---------------------------------------------------- CRM add row */
     .addrow { background: var(--accent-soft); }
     .addrow td { padding: 10px 12px; }
@@ -1259,6 +1365,7 @@ HEADER = """
         <a href="/crm" class="{% if tab == 'crm' %}on{% endif %}">CRM</a>
         <a href="/linkedin" class="{% if tab == 'linkedin' %}on{% endif %}">LinkedIn Post</a>
         <a href="/youtube" class="{% if tab == 'youtube' %}on{% endif %}">YouTube</a>
+        <a href="/x" class="{% if tab == 'x' %}on{% endif %}">X</a>
         <a href="/events" class="{% if tab == 'events' %}on{% endif %}">Events</a>
       </nav>
 
@@ -2288,6 +2395,172 @@ YOUTUBE_PAGE = """
       <p>No videos cached yet. Press <b>Refresh stats</b> to pull them from YouTube.</p>
     </div>
   {% endif %}
+
+</div>
+</body>
+</html>
+"""
+
+
+X_PAGE = """
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Hire2o - X</title>
+  {% if state.running %}<meta http-equiv="refresh" content="4">{% endif %}
+""" + STYLE + """
+</head>
+<body>
+""" + HEADER + """
+<div class="shell">
+
+  <div class="panel panel-pad searchbar">
+    <form method="post" action="/x/run">
+      <div class="searchrow" style="justify-content:space-between;">
+        <div style="display:flex; gap:9px; align-items:center;">
+          <button class="btn btn-primary" type="submit" {% if state.running %}disabled{% endif %}>
+            {% if state.running %}Working...{% else %}&#10024; Draft comments{% endif %}
+          </button>
+          <button class="btn btn-ghost" type="submit" name="force" value="1"
+                  {% if state.running %}disabled{% endif %}>Redraft all</button>
+          <a class="btn btn-ghost" href="https://x.com/{{ handle }}"
+             target="_blank" rel="noopener noreferrer">@{{ handle }} &#8599;</a>
+        </div>
+        <div class="counts">
+          {{ x_status }} &middot; last {{ max_age }} days &middot; top {{ top_n }}
+          {% if state.last_run %} &middot; run {{ state.last_run }}{% endif %}
+        </div>
+      </div>
+    </form>
+  </div>
+
+  {% if state.running %}
+    <div class="banner">
+      <span class="pulse"></span>
+      <span>Drafting replies - this page refreshes every 4 seconds.</span>
+    </div>
+  {% endif %}
+
+  {% if state.log %}
+    <div class="log" style="height:120px;">{% for line in state.log %}{{ line }}
+{% endfor %}</div>
+  {% endif %}
+
+  <div class="panel panel-pad" style="margin-top:18px;">
+    <form method="post" action="/x/add">
+      <label class="fieldlabel" for="bulk">Paste posts</label>
+      <textarea class="pastebox" id="bulk" name="bulk"
+                placeholder="https://x.com/someone/status/123456
+The text of their post goes on the next lines.
+
+https://x.com/another/status/789012
+And another post here, separated by a blank line."></textarea>
+      <div style="display:flex; align-items:flex-start; gap:12px; margin-top:11px;">
+        <button class="btn btn-primary" type="submit">Add posts</button>
+        <p class="pastehint" style="margin:0;">
+          One post per block, separated by a blank line. Put the link on its own
+          line - the handle is read from it. Then press <b>Draft comments</b>.
+        </p>
+      </div>
+    </form>
+  </div>
+
+  {% if not api_ready %}
+    <div class="setupbox">
+      <h3>&#128274; Connect your timeline (optional)</h3>
+      <p style="margin:0 0 10px; font-size:13.5px;">
+        Pulling posts automatically from the accounts you follow needs a paid X
+        tier and an OAuth user token. Until then, paste posts above.
+      </p>
+      <ol>
+        {% for step in setup %}<li>{{ step }}</li>{% endfor %}
+      </ol>
+    </div>
+  {% endif %}
+
+  <div class="sectionhead">
+    <h2>Posts to reply to</h2>
+    <span class="counts">
+      showing {{ posts|length }}{% if total > posts|length %} of {{ total }} saved{% endif %}
+    </span>
+  </div>
+
+  {% if posts %}
+    {% for p in posts %}
+      <div class="xpost">
+        <div class="xhead">
+          {% if p.author %}
+            <a class="xauthor" href="https://x.com/{{ p.author }}"
+               target="_blank" rel="noopener noreferrer">@{{ p.author }}</a>
+          {% endif %}
+          {% if p.age %}<span class="xage">{{ p.age }}</span>{% endif %}
+          {% if p.likes or p.reposts or p.replies %}
+            <span class="xmetrics">
+              {% if p.likes %}<span>&#9825; {{ p.likes }}</span>{% endif %}
+              {% if p.reposts %}<span>&#8644; {{ p.reposts }}</span>{% endif %}
+              {% if p.replies %}<span>&#128172; {{ p.replies }}</span>{% endif %}
+            </span>
+          {% endif %}
+        </div>
+
+        <div class="xtext">{{ p.text }}</div>
+
+        {% if p.comment %}
+          <div class="xreply">
+            <div class="lbl">Suggested reply</div>
+            <div class="body">{{ p.comment }}</div>
+            <div class="wc">{{ p.comment.split()|length }} words</div>
+          </div>
+        {% else %}
+          <div class="xnone">No reply drafted yet - press Draft comments above.</div>
+        {% endif %}
+
+        <div class="xactions">
+          {% if p.url %}
+            <a class="btn btn-sm btn-primary" href="{{ p.url }}"
+               target="_blank" rel="noopener noreferrer">Open post &#8599;</a>
+          {% endif %}
+          {% if p.comment %}
+            <button class="btn btn-sm copybtn" type="button"
+                    onclick="copyText(this, {{ p.comment | tojson }})">Copy reply</button>
+          {% endif %}
+          <form class="inline" method="post" action="/x/redraft/{{ p.post_id }}">
+            <button class="btn btn-sm btn-ghost" type="submit">Redraft</button>
+          </form>
+          <form class="inline" method="post" action="/x/delete/{{ p.post_id }}"
+                onsubmit="return confirm('Remove this post?');">
+            <button class="btn btn-sm btn-ghost" type="submit">Remove</button>
+          </form>
+        </div>
+      </div>
+    {% endfor %}
+
+    <p class="muted" style="font-size:12.5px; margin-top:4px;">
+      Stored on the <b>XPosts</b> sheet in results.xlsx. Anything older than
+      {{ max_age }} days is hidden automatically.
+    </p>
+
+  {% else %}
+    <div class="panel empty">
+      <div class="big">&#128172;</div>
+      <p>
+        Nothing to reply to yet.<br>
+        Paste a few posts above, then press <b>Draft comments</b>.
+      </p>
+    </div>
+  {% endif %}
+
+  <script>
+    function copyText(btn, text) {
+      navigator.clipboard.writeText(text).then(function () {
+        var was = btn.textContent;
+        btn.textContent = 'Copied';
+        btn.classList.add('done');
+        setTimeout(function () { btn.textContent = was; btn.classList.remove('done'); }, 1600);
+      });
+    }
+  </script>
 
 </div>
 </body>

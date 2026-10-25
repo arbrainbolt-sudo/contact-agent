@@ -19,11 +19,13 @@ CRM_SUGGESTIONS_SHEET = "CrmSuggestions"
 LINKEDIN_SHEET = "LinkedInPosts"
 YOUTUBE_VIDEOS_SHEET = "YouTubeVideos"
 YOUTUBE_CHANNEL_SHEET = "YouTubeChannel"
+X_POSTS_SHEET = "XPosts"
 
 # Sheets the app manages itself. Anything else in the workbook is yours.
 MANAGED_SHEETS = {CONTACTS_SHEET, LATEST_NEWS_SHEET, SAVED_NEWS_SHEET,
                   CRM_SUGGESTIONS_SHEET, LINKEDIN_SHEET,
-                  YOUTUBE_VIDEOS_SHEET, YOUTUBE_CHANNEL_SHEET}
+                  YOUTUBE_VIDEOS_SHEET, YOUTUBE_CHANNEL_SHEET,
+                  X_POSTS_SHEET}
 
 _lock = threading.Lock()
 
