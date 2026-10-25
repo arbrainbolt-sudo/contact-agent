@@ -126,35 +126,37 @@ def write_post(article, log=print):
         body = page
 
     prompt = f"""You are drafting a LinkedIn post for a founder who builds AI
-hiring technology. He writes as an operator and architect - practical,
-sceptical of hype, interested in what things mean rather than what was announced.
+hiring technology. He writes plainly, as if explaining something to a friend
+who does not work in tech.
 
 ARTICLE
 Title: {article['title']}
 Source: {article.get('source', '')}
 Text: {body[:4500]}
 
-Write a LinkedIn post of 100-150 words in HIS voice, first person.
+Write a LinkedIn post of UNDER 50 WORDS in HIS voice, first person.
 
-What the post must do:
-- Open with one sharp line that states a position, not a summary.
-- Say what the article reports, briefly, so a reader who hasn't seen it follows.
-- Then give the analysis: what this implies, what most people will miss,
-  or where the second-order effect lands. This is the substance.
-- Close with a question or an observation that invites a reply.
+Structure:
+- One or two short sentences saying what happened, in plain English.
+- Then HIS OPINION on it: what he thinks, whether he agrees, what it means
+  for people doing the hiring. Use "I think", "I reckon", "My take" or similar.
 
 Rules:
-- Plain prose. No bullet points, no emoji, no hashtags.
+- UNDER 50 WORDS TOTAL. This is a hard limit. Short is the point.
+- Write for someone with no technical background. No jargon. If the article
+  uses a technical term, explain it in ordinary words or leave it out.
+- Short sentences. Everyday words. A 12-year-old should follow it.
+- He must state a view - the post is his opinion, not a summary.
+- No bullet points, no emoji, no hashtags.
 - No "Thoughts?", no "Excited to share", no "game-changer", no "revolutionise".
 - Never claim personal involvement in the events described.
-- Draw only on what the article says. Do not invent numbers or quotes.
-- Between 100 and 150 words.
+- Do not invent numbers or quotes.
 
 Reply with ONLY this JSON:
 {{"post": "", "hook": "", "summary": ""}}
 
-- post: the full post text
-- hook: the opening line alone, under 12 words, for the image
+- post: the full post text, under 50 words
+- hook: the single most interesting idea, under 10 plain words, for the image
 - summary: one sentence on what the article reports"""
 
     data = parse_json(ask_llm(prompt), fallback={})

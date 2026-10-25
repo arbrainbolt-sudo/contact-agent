@@ -2002,7 +2002,7 @@ LINKEDIN_PAGE = """
           <span class="icon">&#9997;</span>
           <h2>2 &middot; Your post</h2>
           {% set wc = post.post.split() | length %}
-          <span class="n {% if 100 <= wc <= 150 %}wc-ok{% else %}wc-off{% endif %}">{{ wc }} words</span>
+          <span class="n {% if wc <= 50 %}wc-ok{% else %}wc-off{% endif %}">{{ wc }} words</span>
         </div>
         <div class="libody">
           {% if post.post %}
