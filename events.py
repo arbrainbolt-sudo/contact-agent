@@ -49,6 +49,7 @@ CATEGORIES = [
     ("bigtech", "4. Large tech companies"),
 ]
 CATEGORY_LABELS = dict(CATEGORIES)
+CATEGORY_LABELS["pitchfest"] = "Pitch fest"
 
 MEANT_FOR_SUGGESTIONS = [
     "Hackathon / build night", "Tech talk + Q&A", "Hands-on workshop",
@@ -139,6 +140,74 @@ BIGTECH_SEED = [
 MONTHS = ["", "January", "February", "March", "April", "May", "June",
           "July", "August", "September", "October", "November", "December"]
 
+# ------------------------------------------------------- pitch fest seed data
+#
+# Startup pitch competitions across NY, NJ, PA and DE.
+# (organizer, event, typical application month, location, who can enter, url)
+#
+# Exact dates move every year, so the month is when applications usually open.
+# "meant_for" says who is eligible - several of these are students only, which
+# is the first thing worth knowing before you spend an evening on a form.
+
+PITCHFEST_SEED = [
+    # ---- open to any founder
+    ("Delaware Prosperity Partnership", "Startup302", 1, "Wilmington, DE",
+     "Open - focus on underrepresented founders",
+     "https://www.choosedelaware.com/startup302/"),
+    ("43North", "43North Startup Competition", 4, "Buffalo, NY",
+     "Open - $1M investment, relocation to Buffalo required (programme ends 2027)",
+     "https://43north.org/founders/whytoapply/"),
+    ("PACT", "Mid-Atlantic Capital Conference - Lion's Den", 8, "Philadelphia, PA",
+     "Open - pitch to regional VCs", "https://philadelphiapact.com/"),
+    ("Propelify / TechUnited:NJ", "Propelify Startup Showdown", 7, "Hoboken, NJ",
+     "Open - NJ and tri-state founders", "https://propelify.com/"),
+    ("TechUnited:NJ", "Startup Showdown", None, "New Jersey",
+     "Open - rolling pitch show",
+     "https://techunited.co/startup/startup-showdown-pitch-showdown/"),
+    ("Startup World Cup", "Philadelphia Regional", None, "Philadelphia, PA",
+     "Open - winner goes to the global final",
+     "https://www.startupworldcup.io/usa-regional-philly"),
+    ("Ben Franklin Technology Partners", "Big Idea / funding competitions", None,
+     "Pennsylvania", "Open - PA-based companies",
+     "https://www.sep.benfranklin.org/resources/events/"),
+    ("Startup Grind Philadelphia", "Pitch nights", None, "Philadelphia, PA",
+     "Open - community pitch events",
+     "https://www.startupgrind.com/philadelphia/"),
+    ("City of Philadelphia", "Business Summit and Expo Pitch Competition", 3,
+     "Philadelphia, PA", "Open - Philadelphia businesses",
+     "https://www.phila.gov/programs/office-of-business-services/"),
+
+    # ---- university affiliated (check eligibility before applying)
+    ("Penn Venture Lab", "Startup Challenge", 10, "Philadelphia, PA",
+     "Penn students and recent alumni only",
+     "https://venturelab.upenn.edu/startup-challenge"),
+    ("Temple University", "Be Your Own Boss Bowl", 11, "Philadelphia, PA",
+     "Temple affiliated only",
+     "https://www.fox.temple.edu/institutes-and-centers/innovation-entrepreneurship-institute/"),
+    ("Drexel - Baiada Institute", "Baiada Startup Competition", 12,
+     "Philadelphia, PA", "Drexel affiliated only",
+     "https://drexel.edu/close/baiada-institute/"),
+    ("NYU", "Entrepreneurs Challenge", 10, "New York, NY",
+     "NYU affiliated only", "https://entrepreneur.nyu.edu/"),
+    ("Columbia University", "Columbia Venture Competition", 12, "New York, NY",
+     "Columbia affiliated only", "https://entrepreneurship.columbia.edu/"),
+]
+
+
+def _pitchfest_rows():
+    """Seed rows for the pitch fest box."""
+    rows = []
+    for organizer, event, month, where, who, url in PITCHFEST_SEED:
+        when = f"Applications ~{MONTHS[month]}" if month else "Rolling / varies"
+        rows.append({
+            "category": "pitchfest", "date": when,
+            "sort_date": _next_occurrence(month),
+            "company": organizer, "event": event, "location": where,
+            "meant_for": who, "register_url": url,
+        })
+    return rows
+
+
 
 def _next_occurrence(month):
     """The next time a month rolls around, as an ISO date for sorting."""
@@ -174,6 +243,9 @@ def _text(v):
 
 def _seed_rows():
     rows = []
+    for row in _pitchfest_rows():
+        rows.append(dict(row, event_id=uuid.uuid4().hex[:8],
+                         interested=False, source="seed", notes=""))
     for company, event, month, where, focus, url in BIGTECH_SEED:
         when = f"Typically {MONTHS[month]}" if month else "Date varies"
         rows.append({
@@ -290,9 +362,20 @@ def _classify(location):
                               "downingtown", "exton", "radnor", "bala cynwyd",
                               "navy yard", "university city", "sep")):
         return "philadelphia"
-    if any(w in loc for w in ("new york", "nyc", "brooklyn", "manhattan",
-                              "new jersey", ", nj", "newark", "jersey city",
-                              "princeton", "delaware", ", de", "wilmington")):
+    if any(w in loc for w in (
+            # New York
+            "new york", "nyc", "brooklyn", "manhattan", "queens", "bronx",
+            "long island city", "harlem", "soho", "tribeca", "chelsea, ny",
+            "flatiron", "midtown", "williamsburg", "buffalo", "rochester, ny",
+            "albany", "syracuse", "ithaca", "white plains", "yonkers",
+            # New Jersey
+            "new jersey", ", nj", "newark", "jersey city", "hoboken",
+            "princeton", "trenton", "montclair", "morristown", "edison",
+            "new brunswick", "camden", "cherry hill", "atlantic city",
+            "red bank", "somerset", "piscataway", "paramus",
+            # Delaware
+            "delaware", ", de", "wilmington", "newark, de", "dover",
+            "rehoboth", "middletown, de")):
         return "tristate"
     # Pittsburgh, Bethlehem, Erie and the rest of PA are a drive away, not local.
     return "usa"
@@ -388,7 +471,13 @@ def fetch_luma(city_slug, city_label):
         start = str(node.get("start_at") or node.get("startAt")
                     or node.get("start_date") or node.get("startDate") or "")
         iso = start[:10] if re.match(r"\d{4}-\d{2}-\d{2}", start) else ""
-        location = _location_of(node) or city_label
+        venue = _location_of(node)
+        # Luma often gives a venue name with no city, which would land the event
+        # in "All over USA". Append the city so _classify can see where it is.
+        if venue and city_label.split(",")[0].lower() not in venue.lower():
+            location = f"{venue}, {city_label}"
+        else:
+            location = venue or city_label
         if not _interesting(f"{name} {location}"):
             continue
         seen.add(name.lower())
@@ -423,7 +512,11 @@ def fetch_generic(url, source_name, city_label, organizer="", trusted=False,
             continue
         start = str(node.get("startDate") or node.get("start_date") or "")
         iso = start[:10] if re.match(r"\d{4}-\d{2}-\d{2}", start) else ""
-        location = _location_of(node) or city_label
+        venue = _location_of(node)
+        if venue and city_label.split(",")[0].lower() not in venue.lower():
+            location = f"{venue}, {city_label}"
+        else:
+            location = venue or city_label
         if not trusted and not _interesting(f"{name} {location}"):
             continue
         seen.add(name.lower())
@@ -468,8 +561,37 @@ SOURCES = [
         "https://www.sep.benfranklin.org/resources/events/", "benfranklin",
         "Philadelphia, PA", organizer="Ben Franklin Technology Partners, SEP",
         trusted=True, meant_for="Startup / entrepreneurship")),
+    ("TiE New York",      lambda: fetch_generic(
+        "https://newyork.tie.org/calendar/", "tie", "New York, NY",
+        organizer="TiE New York", trusted=True,
+        meant_for="Startup / entrepreneurship")),
+    ("TiE New Jersey",    lambda: fetch_generic(
+        "https://nj.tie.org/calendar/", "tie", "New Jersey",
+        organizer="TiE New Jersey", trusted=True,
+        meant_for="Startup / entrepreneurship")),
+    ("TechUnited:NJ",     lambda: fetch_generic(
+        "https://techunited.co/events/", "techunited", "New Jersey",
+        organizer="TechUnited:NJ", trusted=True,
+        meant_for="Startup / entrepreneurship")),
+    ("NJ Innovation",     lambda: fetch_generic(
+        "https://www.njeda.gov/events/", "njeda", "New Jersey",
+        organizer="NJEDA", trusted=True,
+        meant_for="Startup / entrepreneurship")),
+    ("Delaware Innovation", lambda: fetch_generic(
+        "https://innovationspace.org/events/", "innovationspace", "Wilmington, DE",
+        organizer="The Innovation Space", trusted=True,
+        meant_for="Startup / entrepreneurship")),
     ("Luma Philadelphia", lambda: fetch_luma("philadelphia", "Philadelphia, PA")),
     ("Luma New York",     lambda: fetch_luma("nyc", "New York, NY")),
+    ("Eventbrite NYC",    lambda: fetch_generic(
+        "https://www.eventbrite.com/d/ny--new-york/technology--events/",
+        "eventbrite", "New York, NY")),
+    ("Eventbrite NJ",     lambda: fetch_generic(
+        "https://www.eventbrite.com/d/nj--newark/technology--events/",
+        "eventbrite", "Newark, NJ")),
+    ("Eventbrite DE",     lambda: fetch_generic(
+        "https://www.eventbrite.com/d/de--wilmington/business--events/",
+        "eventbrite", "Wilmington, DE")),
     ("Eventbrite Philly", lambda: fetch_generic(
         "https://www.eventbrite.com/d/pa--philadelphia/technology--events/",
         "eventbrite", "Philadelphia, PA")),
@@ -493,6 +615,36 @@ BOOKMARKS = [
      "event": "Ben Franklin SEP — ecosystem events",
      "location": "Philadelphia, PA", "meant_for": "Startup / entrepreneurship",
      "register_url": "https://www.sep.benfranklin.org/resources/events/"},
+
+    # --- New York / New Jersey / Delaware
+    {"category": "tristate", "company": "TiE New York",
+     "event": "TiE New York — event calendar",
+     "location": "New York, NY", "meant_for": "Startup / entrepreneurship",
+     "register_url": "https://newyork.tie.org/calendar/"},
+    {"category": "tristate", "company": "TiE New Jersey",
+     "event": "TiE New Jersey — event calendar",
+     "location": "New Jersey", "meant_for": "Startup / entrepreneurship",
+     "register_url": "https://nj.tie.org/calendar/"},
+    {"category": "tristate", "company": "TechUnited:NJ",
+     "event": "TechUnited:NJ — events and pitch nights",
+     "location": "New Jersey", "meant_for": "Startup / entrepreneurship",
+     "register_url": "https://techunited.co/events/"},
+    {"category": "tristate", "company": "NJEDA",
+     "event": "NJ Economic Development Authority — events",
+     "location": "New Jersey", "meant_for": "Startup / entrepreneurship",
+     "register_url": "https://www.njeda.gov/events/"},
+    {"category": "tristate", "company": "The Innovation Space",
+     "event": "Delaware Innovation Space — events",
+     "location": "Wilmington, DE", "meant_for": "Startup / entrepreneurship",
+     "register_url": "https://innovationspace.org/events/"},
+    {"category": "tristate", "company": "Delaware Prosperity Partnership",
+     "event": "Choose Delaware — startup events",
+     "location": "Delaware", "meant_for": "Startup / entrepreneurship",
+     "register_url": "https://www.choosedelaware.com/events/"},
+    {"category": "tristate", "company": "Luma",
+     "event": "Luma New York — tech and startup events",
+     "location": "New York, NY", "meant_for": "Tech / startup",
+     "register_url": "https://luma.com/nyc"},
 ]
 
 
@@ -522,6 +674,15 @@ def refresh(log=print):
         existing = all_events()
         known = {_key(r) for r in existing}
         added = 0
+
+        # Pitch competitions are a fixed list, topped up if any went missing.
+        for row in _pitchfest_rows():
+            if _key(row) in known:
+                continue
+            known.add(_key(row))
+            existing.append(dict(row, event_id=uuid.uuid4().hex[:8],
+                                 interested=False, source="seed", notes=""))
+            added += 1
 
         # Standing links first, so they exist even if every source fails.
         for mark in BOOKMARKS:
@@ -624,13 +785,15 @@ def events_page():
         row["past"] = bool(row.get("sort_date")) and row["sort_date"] < today
 
     interested = sorted([r for r in rows if r["interested"]], key=_sort_key)
+    pitchfest = sorted([r for r in rows if r["category"] == "pitchfest"],
+                       key=_sort_key)
     boxes = []
     for key, label in CATEGORIES:
         subset = [r for r in rows if r["category"] == key and not r["past"]]
         boxes.append((key, label, sorted(subset, key=_sort_key)))
 
     return render_template_string(
-        PAGE, interested=interested, boxes=boxes,
+        PAGE, interested=interested, pitchfest=pitchfest, boxes=boxes,
         suggestions=MEANT_FOR_SUGGESTIONS, labels=CATEGORY_LABELS,
         workbook=store.XLSX_FILE, total=len(rows), status=STATUS,
         refresh_hour=REFRESH_HOUR, has_logo=_logo_exists(),
@@ -707,6 +870,9 @@ PAGE = """
             letter-spacing: .04em; color: #444; }
   .box.mine { border: 2px solid #96C950; background: #fbfdf6; }
   .box.mine h2 { color: #4d7a1f; }
+  .box.pitch { border: 2px solid #00a8a8; background: #f4fcfc; }
+  .box.pitch h2 { color: #00807f; }
+  .note { font-size: 12px; color: #6b7280; margin: -6px 0 12px; }
   .grid { display: block; }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -810,6 +976,15 @@ PAGE = """
   </table>
   {% else %}<div class="empty">Nothing here yet.</div>{% endif %}
 {% endmacro %}
+
+<div class="box pitch">
+  <h2>&#128640; Pitch fest &mdash; startups in NY, NJ, PA, DE &mdash; {{ pitchfest|length }}</h2>
+  <div class="note">
+    Application windows move each year &mdash; treat the month as a prompt to check,
+    not a deadline. &ldquo;Meant for&rdquo; says who is eligible.
+  </div>
+  {{ event_table(pitchfest, co_label='Organizer') }}
+</div>
 
 <div class="box mine">
   <h2>&#9733; My Interest &mdash; {{ interested|length }}</h2>
