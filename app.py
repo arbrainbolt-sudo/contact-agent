@@ -310,6 +310,7 @@ def x_log(message):
 
 def x_worker(force=False):
     try:
+        x_log("Drafting replies...")
         if force:
             xcom.draft_all(log=x_log, force=True)
         else:
@@ -602,14 +603,26 @@ def x_run():
 
 @app.route("/x/add", methods=["POST"])
 def x_add():
+    """Save the pasted posts, then draft their replies straight away."""
     blob = request.form.get("bulk", "").strip()
+    added = 0
+    x_state["log"] = []
+
     if blob:
-        xcom.add_bulk(blob, log=x_log)
+        added = xcom.add_bulk(blob, log=x_log)
     else:
         url = request.form.get("url", "").strip()
         text = request.form.get("text", "").strip()
         if url or text:
-            xcom.add_post(url, text, log=x_log)
+            added = 1 if xcom.add_post(url, text, log=x_log) else 0
+
+    if added and not x_state["running"]:
+        x_state["running"] = True
+        threading.Thread(target=x_worker, daemon=True).start()
+    elif not added:
+        x_log("Nothing was added - check the link is an x.com/<handle>/status/<id> URL "
+              "and the post text is on the lines below it.")
+
     return redirect(url_for("x_page"))
 
 
@@ -2460,7 +2473,7 @@ And another post here, separated by a blank line."></textarea>
         <button class="btn btn-primary" type="submit">Add posts</button>
         <p class="pastehint" style="margin:0;">
           One post per block, separated by a blank line. Put the link on its own
-          line - the handle is read from it. Then press <b>Draft comments</b>.
+          line - the handle is read from it. Replies are drafted as soon as you add them.
         </p>
       </div>
     </form>

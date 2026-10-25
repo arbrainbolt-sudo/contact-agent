@@ -235,12 +235,30 @@ Never do these:
 Reply with ONLY this JSON:
 {{"comment": ""}}"""
 
-    data = parse_json(ask_llm(prompt), fallback={})
+    raw = ask_llm(prompt)
+    if not raw:
+        log(f"   @{author}: model returned nothing")
+        return ""
+
+    data = parse_json(raw, fallback=None)
     comment = ""
     if isinstance(data, dict):
         comment = (data.get("comment") or "").strip()
+
+    # Free models often ignore "reply with JSON" and just write the reply.
+    # Use it rather than throwing a perfectly good sentence away.
     if not comment:
-        log(f"   no comment drafted for @{author}")
+        text_out = raw.strip()
+        text_out = re.sub(r"^```(?:json)?|```$", "", text_out).strip()
+        text_out = re.sub(r'^\s*\{.*?"comment"\s*:\s*"?', "", text_out, flags=re.S)
+        text_out = text_out.rstrip('"}').strip()
+        text_out = text_out.strip('"').strip()
+        if 3 < len(text_out) < 600:
+            comment = text_out
+            log(f"   @{author}: used plain-text reply ({len(comment.split())} words)")
+
+    if not comment:
+        log(f"   @{author}: could not read a reply from: {raw[:120]}")
     return comment
 
 
@@ -249,6 +267,9 @@ def draft_all(log=print, force=False):
     rows = all_posts()
     targets = {r["post_id"] for r in recent()}
     done = 0
+    log(f"   {len(rows)} saved, {len(targets)} inside the {MAX_AGE_DAYS}-day window")
+    if not targets:
+        log("   nothing to draft - add posts below, or they are all too old")
 
     for r in rows:
         if r.get("post_id") not in targets:
@@ -256,6 +277,7 @@ def draft_all(log=print, force=False):
         if r.get("comment") and not force:
             continue
         if not (r.get("text") or "").strip():
+            log(f"   @{r.get('author', '?')}: no post text saved, nothing to reply to")
             continue
         log(f"   drafting reply to @{r.get('author', '?')}")
         comment = draft_comment(r, log=log)
