@@ -32,7 +32,7 @@ API = "https://api.x.com/2"
 
 POST_FIELDS = ["post_id", "author", "author_name", "url", "text", "posted_at",
                "likes", "reposts", "replies", "comment", "comment_at",
-               "added_at", "source"]
+               "commented", "added_at", "source"]
 
 MAX_AGE_DAYS = int(os.getenv("X_MAX_AGE_DAYS", "3"))        # nothing older shows
 PURGE_AFTER_DAYS = 21                                       # housekeeping
@@ -125,12 +125,14 @@ def recent(limit=None):
         item = dict(r)
         item["when"] = dt
         item["age"] = age_label(r.get("posted_at"))
+        item["done"] = str(r.get("commented", "")).lower() in ("yes", "1", "true")
         item["engagement"] = (_int(r.get("likes")) + _int(r.get("reposts")) * 2
                               + _int(r.get("replies")) * 3)
         live.append(item)
 
-    # most engagement first when we have numbers, newest first otherwise
+    # still-to-do first; within that, most engagement, then newest
     live.sort(key=lambda x: (x["engagement"], x["when"] or _now()), reverse=True)
+    live.sort(key=lambda x: x["done"])
     return live[:(limit or TOP_N)]
 
 
@@ -172,7 +174,7 @@ def add_post(url, text, author="", posted_at="", log=print):
         "text": text,
         "posted_at": posted_at or _now().strftime("%Y-%m-%dT%H:%M:%SZ"),
         "likes": "", "reposts": "", "replies": "",
-        "comment": "", "comment_at": "",
+        "comment": "", "comment_at": "", "commented": "",
         "added_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "source": "paste",
     })
@@ -196,6 +198,19 @@ def add_bulk(blob, log=print):
             added += 1
     log(f"   added {added} post(s)")
     return added
+
+
+def toggle_commented(post_id):
+    """Tick or untick 'I have replied to this'. Returns the new state."""
+    rows = all_posts()
+    state = ""
+    for r in rows:
+        if r.get("post_id") == post_id:
+            state = "" if str(r.get("commented", "")).lower() in ("yes", "1", "true") else "yes"
+            r["commented"] = state
+            break
+    save_all(rows)
+    return state
 
 
 def delete_post(post_id):
@@ -383,7 +398,7 @@ def fetch_timeline(log=print):
             "likes": str(metrics.get("like_count", 0)),
             "reposts": str(metrics.get("retweet_count", 0)),
             "replies": str(metrics.get("reply_count", 0)),
-            "comment": "", "comment_at": "",
+            "comment": "", "comment_at": "", "commented": "",
             "added_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
             "source": "api",
         })

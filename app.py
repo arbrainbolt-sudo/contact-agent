@@ -632,6 +632,12 @@ def x_redraft(post_id):
     return redirect(url_for("x_page"))
 
 
+@app.route("/x/commented/<post_id>", methods=["POST"])
+def x_commented(post_id):
+    xcom.toggle_commented(post_id)
+    return redirect(url_for("x_page"))
+
+
 @app.route("/x/delete/<post_id>", methods=["POST"])
 def x_delete(post_id):
     xcom.delete_post(post_id)
@@ -1330,11 +1336,27 @@ STYLE = """
     .xreply .wc { font-size:11px; color:var(--ink-faint); margin-top:6px; }
     .xnone { margin-top:12px; font-size:13px; color:var(--ink-faint); font-style:italic; }
     .xactions { display:flex; gap:7px; margin-top:13px; padding-top:12px;
-                border-top:1px solid var(--line-soft); flex-wrap:wrap; }
+                border-top:1px solid var(--line-soft); flex-wrap:wrap;
+                align-items:center; }
     .pastebox { width:100%; min-height:92px; font-family:inherit; font-size:13.5px;
                 line-height:1.5; padding:11px 13px; border:1px solid var(--line);
                 border-radius:8px; resize:vertical; }
     .pastehint { font-size:12px; color:var(--ink-faint); margin:8px 0 0; line-height:1.6; }
+    .xpost.done { background:var(--green-soft); border-color:#bfe3c9; }
+    .xpost.done .xtext, .xpost.done .xreply .body { color:#5b7566; }
+    .xpost.done .xreply { background:#e4f3e8; border-left-color:var(--green); }
+    .xlink { display:block; font-size:12px; color:var(--accent-dark); word-break:break-all;
+             margin-top:10px; text-decoration:none; }
+    .xlink:hover { text-decoration:underline; }
+    .donecheck { display:flex; align-items:center; gap:7px; cursor:pointer;
+                 font-size:13px; font-weight:600; color:var(--ink-soft);
+                 border:1px solid var(--line); border-radius:8px; padding:7px 12px;
+                 background:#fff; transition:all .13s; }
+    .donecheck:hover { border-color:var(--green); color:#15803d; }
+    .donecheck input { width:16px; height:16px; margin:0; cursor:pointer; accent-color:var(--green); }
+    .donecheck.on { background:var(--green); border-color:var(--green); color:#fff; }
+    .btn-trash { color:var(--ink-faint); }
+    .btn-trash:hover { background:var(--red-soft); border-color:#f0b4b4; color:var(--red); }
 
     /* ---------------------------------------------------- CRM add row */
     .addrow { background: var(--accent-soft); }
@@ -2501,7 +2523,7 @@ And another post here, separated by a blank line."></textarea>
 
   {% if posts %}
     {% for p in posts %}
-      <div class="xpost">
+      <div class="xpost {% if p.done %}done{% endif %}">
         <div class="xhead">
           {% if p.author %}
             <a class="xauthor" href="https://x.com/{{ p.author }}"
@@ -2519,6 +2541,10 @@ And another post here, separated by a blank line."></textarea>
 
         <div class="xtext">{{ p.text }}</div>
 
+        {% if p.url %}
+          <a class="xlink" href="{{ p.url }}" target="_blank" rel="noopener noreferrer">{{ p.url }}</a>
+        {% endif %}
+
         {% if p.comment %}
           <div class="xreply">
             <div class="lbl">Suggested reply</div>
@@ -2532,18 +2558,29 @@ And another post here, separated by a blank line."></textarea>
         <div class="xactions">
           {% if p.url %}
             <a class="btn btn-sm btn-primary" href="{{ p.url }}"
-               target="_blank" rel="noopener noreferrer">Open post &#8599;</a>
+               target="_blank" rel="noopener noreferrer">&#128279; Go to post</a>
           {% endif %}
           {% if p.comment %}
             <button class="btn btn-sm copybtn" type="button"
-                    onclick="copyText(this, {{ p.comment | tojson }})">Copy reply</button>
+                    onclick="copyText(this, {{ p.comment | tojson }})">&#128203; Copy reply</button>
           {% endif %}
-          <form class="inline" method="post" action="/x/redraft/{{ p.post_id }}">
-            <button class="btn btn-sm btn-ghost" type="submit">Redraft</button>
+
+          <form class="inline" method="post" action="/x/commented/{{ p.post_id }}">
+            <label class="donecheck {% if p.done %}on{% endif %}">
+              <input type="checkbox" {% if p.done %}checked{% endif %}
+                     onchange="this.form.submit()">
+              {% if p.done %}Commented{% else %}I have commented{% endif %}
+            </label>
+          </form>
+
+          <form class="inline" method="post" action="/x/redraft/{{ p.post_id }}"
+                style="margin-left:auto;">
+            <button class="btn btn-sm btn-ghost" type="submit">&#8635; Redraft</button>
           </form>
           <form class="inline" method="post" action="/x/delete/{{ p.post_id }}"
-                onsubmit="return confirm('Remove this post?');">
-            <button class="btn btn-sm btn-ghost" type="submit">Remove</button>
+                onsubmit="return confirm('Delete this post?');">
+            <button class="btn btn-sm btn-trash" type="submit"
+                    title="Delete this post">&#128465; Delete</button>
           </form>
         </div>
       </div>
