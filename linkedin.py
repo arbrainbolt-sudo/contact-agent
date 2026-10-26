@@ -372,3 +372,267 @@ def run_daily(log=print, force=False):
     save_post(record)
     log(f"Done. {len(post.split())} words, image {image_file or 'none'}.")
     return record
+
+
+# ==================================================================
+# Posts to comment on - paste a LinkedIn post, get a drafted comment.
+# Same idea as the X tab, but LinkedIn comments run a little longer
+# and read more like a considered reply than a quick quip.
+# ==================================================================
+
+import re
+from datetime import timedelta, timezone
+
+COMMENT_FIELDS = ["post_id", "author", "url", "text", "added_at",
+                  "comment", "comment_at", "commented"]
+
+COMMENT_MAX_AGE_DAYS = int(os.getenv("LI_MAX_AGE_DAYS", "7"))
+COMMENT_TOP_N = int(os.getenv("LI_TOP_N", "15"))
+
+# linkedin.com/posts/<author>_<slug>-activity-<id>-<hash>
+# linkedin.com/feed/update/urn:li:activity:<id>
+# The author slug sits before the first underscore:
+#   /posts/<author>_<post-slug>-activity-<id>-<hash>
+LI_POSTS_RE = re.compile(
+    r"https?://(?:www\.)?linkedin\.com/posts/([A-Za-z0-9\-%]+)_[^\s]*?activity-(\d+)",
+    re.I)
+LI_FEED_RE = re.compile(
+    r"https?://(?:www\.)?linkedin\.com/feed/update/urn:li:(?:activity|ugcPost):(\d+)",
+    re.I)
+LI_ANY_RE = re.compile(r"https?://(?:www\.)?linkedin\.com/\S+", re.I)
+
+
+def parse_li_url(url):
+    """Pull (author, activity id) out of a LinkedIn post link."""
+    url = (url or "").strip()
+    m = LI_POSTS_RE.search(url)
+    if m:
+        return m.group(1), m.group(2)
+    m = LI_FEED_RE.search(url)
+    if m:
+        return "", m.group(1)
+    return "", ""
+
+
+def pretty_author(slug):
+    """anurag-rohatgi-123abc -> Anurag Rohatgi"""
+    if not slug:
+        return ""
+    parts = [p for p in slug.split("-") if p and not re.fullmatch(r"[0-9a-f]{4,}", p)]
+    return " ".join(p.capitalize() for p in parts[:3])
+
+
+# ---------------------------------------------------------------- storage
+
+def comments_all():
+    return store.read_sheet(store.LI_COMMENTS_SHEET, COMMENT_FIELDS)
+
+
+def comments_save(rows):
+    store.write_sheet(store.LI_COMMENTS_SHEET, COMMENT_FIELDS, rows)
+
+
+def _li_when(value):
+    v = (value or "").strip()
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(v, fmt).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+    return None
+
+
+def comments_recent(limit=None):
+    """Inside the age window, still-to-do first, newest first."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=COMMENT_MAX_AGE_DAYS)
+    live = []
+    for r in comments_all():
+        dt = _li_when(r.get("added_at"))
+        if dt and dt < cutoff:
+            continue
+        item = dict(r)
+        item["when"] = dt
+        item["done"] = str(r.get("commented", "")).lower() in ("yes", "1", "true")
+        item["who"] = pretty_author(r.get("author", "")) or r.get("author", "")
+        live.append(item)
+
+    live.sort(key=lambda x: x["when"] or datetime.now(timezone.utc), reverse=True)
+    live.sort(key=lambda x: x["done"])
+    return live[:(limit or COMMENT_TOP_N)]
+
+
+def comment_add(url, text, log=print):
+    url = (url or "").strip()
+    text = (text or "").strip()
+    author, activity = parse_li_url(url)
+
+    if not activity:
+        activity = hashlib.sha1((url + text).encode()).hexdigest()[:16]
+    if not url and not text:
+        return ""
+
+    rows = comments_all()
+    if any(r.get("post_id") == activity for r in rows):
+        log("   already saved")
+        return activity
+
+    rows.insert(0, {
+        "post_id": activity,
+        "author": author,
+        "url": url,
+        "text": text,
+        "added_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "comment": "", "comment_at": "", "commented": "",
+    })
+    comments_save(rows)
+    return activity
+
+
+def comment_add_bulk(blob, log=print):
+    """A new post starts at each linkedin.com link; text follows below it."""
+    blob = (blob or "").strip()
+    if not blob:
+        return 0
+
+    blocks, current = [], None
+    for line in blob.splitlines():
+        if LI_ANY_RE.search(line):
+            if current:
+                blocks.append(current)
+            current = {"url": LI_ANY_RE.search(line).group(0), "lines": []}
+            trailing = LI_ANY_RE.sub("", line).strip()
+            if trailing:
+                current["lines"].append(trailing)
+        elif current is not None:
+            current["lines"].append(line)
+        elif line.strip():
+            current = {"url": "", "lines": [line]}
+    if current:
+        blocks.append(current)
+
+    added = 0
+    for b in blocks:
+        text = re.sub(r"\n{3,}", "\n\n", "\n".join(b["lines"]).strip())
+        if not b["url"] and not text:
+            continue
+        if comment_add(b["url"], text, log=log):
+            added += 1
+
+    log(f"   added {added} post(s) from {len(blocks)} block(s)")
+    return added
+
+
+def comment_toggle(post_id):
+    rows = comments_all()
+    for r in rows:
+        if r.get("post_id") == post_id:
+            done = str(r.get("commented", "")).lower() in ("yes", "1", "true")
+            r["commented"] = "" if done else "yes"
+            break
+    comments_save(rows)
+
+
+def comment_delete(post_id):
+    comments_save([r for r in comments_all() if r.get("post_id") != post_id])
+
+
+# ---------------------------------------------------------------- drafting
+
+def draft_li_comment(post, log=print):
+    """One LinkedIn comment, in his voice."""
+    text = (post.get("text") or "").strip()
+    if not text:
+        return ""
+
+    who = pretty_author(post.get("author", ""))
+    whose = f"{who}'s" if who else "someone's"
+
+    prompt = f"""Draft a comment on {whose} LinkedIn post.
+
+THE POST:
+{text[:1500]}
+
+You are commenting as a founder who builds AI hiring and candidate vetting
+technology. He is an operator - practical, sceptical of hype, more interested
+in what something means than in what was announced.
+
+The comment must:
+- Add something of his own. A specific angle, a counterpoint, something he has
+  seen in practice, or a question worth answering.
+- Be 30 to 60 words. Long enough to say something, short enough to read.
+- Sound like a person thinking out loud, not a brand account.
+- Stay on what the post actually says. Do not invent facts or numbers.
+
+Never do these:
+- No "Great post", "Well said", "Thanks for sharing", "Couldn't agree more",
+  "This is so important", "Spot on".
+- No emoji, no hashtags.
+- No pitching his company. He is joining a conversation, not advertising.
+- Do not open by naming the author.
+
+Reply with ONLY this JSON:
+{{"comment": ""}}"""
+
+    raw = ask_llm(prompt)
+    if not raw:
+        log("   model returned nothing")
+        return ""
+
+    data = parse_json(raw, fallback=None)
+    comment = ""
+    if isinstance(data, dict):
+        comment = (data.get("comment") or "").strip()
+
+    # Models often write the comment straight out instead of wrapping it in JSON.
+    if not comment:
+        out = raw.strip()
+        out = re.sub(r"^```(?:json)?|```$", "", out).strip()
+        out = re.sub(r'^\s*\{.*?"comment"\s*:\s*"?', "", out, flags=re.S)
+        out = out.rstrip('"}').strip().strip('"').strip()
+        if 3 < len(out) < 900:
+            comment = out
+            log(f"   used plain-text comment ({len(comment.split())} words)")
+
+    if not comment:
+        log(f"   could not read a comment from: {raw[:120]}")
+    return comment
+
+
+def draft_li_all(log=print, force=False):
+    rows = comments_all()
+    targets = {r["post_id"] for r in comments_recent()}
+    done = 0
+    log(f"   {len(rows)} saved, {len(targets)} inside the {COMMENT_MAX_AGE_DAYS}-day window")
+
+    for r in rows:
+        if r.get("post_id") not in targets:
+            continue
+        if r.get("comment") and not force:
+            continue
+        if not (r.get("text") or "").strip():
+            log(f"   {r.get('author') or 'post'}: no text saved, nothing to comment on")
+            continue
+        log(f"   drafting comment on {pretty_author(r.get('author','')) or 'a post'}")
+        c = draft_li_comment(r, log=log)
+        if c:
+            r["comment"] = c
+            r["comment_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+            done += 1
+
+    if done:
+        comments_save(rows)
+    log(f"Drafted {done} comment(s).")
+    return done
+
+
+def redraft_li_one(post_id, log=print):
+    rows = comments_all()
+    for r in rows:
+        if r.get("post_id") == post_id:
+            c = draft_li_comment(r, log=log)
+            if c:
+                r["comment"] = c
+                r["comment_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+                comments_save(rows)
+            return c
+    return ""

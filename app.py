@@ -284,6 +284,17 @@ def li_log(message):
     li_state["log"].append(message)
 
 
+def li_comment_worker(force=False):
+    try:
+        li_log("Drafting comments...")
+        linkedin.draft_li_all(log=li_log, force=force)
+        li_state["last_run"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+    except Exception as e:
+        li_log(f"ERROR: {e}")
+    finally:
+        li_state["running"] = False
+
+
 def li_worker(force=False):
     try:
         linkedin.run_daily(log=li_log, force=force)
@@ -691,6 +702,9 @@ def linkedin_page():
         LINKEDIN_PAGE,
         post=post,
         past=[p for p in linkedin.history()[1:13]],
+        engage=linkedin.comments_recent(),
+        engage_total=len(linkedin.comments_all()),
+        engage_days=linkedin.COMMENT_MAX_AGE_DAYS,
         today=datetime.now().strftime("%Y-%m-%d"),
         post_time=LINKEDIN_TIME,
         has_logo=logo_exists(),
@@ -703,6 +717,50 @@ def linkedin_page():
 @app.route("/linkedin/run", methods=["POST"])
 def linkedin_run():
     start_li_run(force=True)
+    return redirect(url_for("linkedin_page"))
+
+
+@app.route("/linkedin/add", methods=["POST"])
+def linkedin_add():
+    """Save pasted posts, then draft their comments straight away."""
+    li_state["log"] = []
+    blob = request.form.get("bulk", "").strip()
+    added = linkedin.comment_add_bulk(blob, log=li_log) if blob else 0
+
+    if added and not li_state["running"]:
+        li_state["running"] = True
+        threading.Thread(target=li_comment_worker, daemon=True).start()
+    elif not added:
+        li_log("Nothing was added - paste a linkedin.com post link with the post "
+               "text on the lines below it.")
+    return redirect(url_for("linkedin_page"))
+
+
+@app.route("/linkedin/draft", methods=["POST"])
+def linkedin_draft():
+    if not li_state["running"]:
+        li_state["running"] = True
+        li_state["log"] = []
+        force = request.form.get("force") == "1"
+        threading.Thread(target=li_comment_worker, args=(force,), daemon=True).start()
+    return redirect(url_for("linkedin_page"))
+
+
+@app.route("/linkedin/redraft/<post_id>", methods=["POST"])
+def linkedin_redraft(post_id):
+    linkedin.redraft_li_one(post_id, log=li_log)
+    return redirect(url_for("linkedin_page"))
+
+
+@app.route("/linkedin/commented/<post_id>", methods=["POST"])
+def linkedin_commented(post_id):
+    linkedin.comment_toggle(post_id)
+    return redirect(url_for("linkedin_page"))
+
+
+@app.route("/linkedin/remove/<post_id>", methods=["POST"])
+def linkedin_remove(post_id):
+    linkedin.comment_delete(post_id)
     return redirect(url_for("linkedin_page"))
 
 
@@ -2237,16 +2295,116 @@ LINKEDIN_PAGE = """
     </div>
   {% endif %}
 
+  <div class="sectionhead" style="margin-top:34px;">
+    <h2>Posts to comment on</h2>
+    <span class="counts">
+      showing {{ engage|length }}{% if engage_total > engage|length %} of {{ engage_total }} saved{% endif %}
+      &middot; last {{ engage_days }} days
+    </span>
+  </div>
+
+  <div class="panel panel-pad">
+    <form method="post" action="/linkedin/add">
+      <label class="fieldlabel" for="libulk">Paste LinkedIn posts</label>
+      <textarea class="pastebox" id="libulk" name="bulk"
+                placeholder="https://www.linkedin.com/posts/someone_slug-activity-7123456789-abcd
+The text of their post goes on the lines below the link.
+
+https://www.linkedin.com/feed/update/urn:li:activity:7987654321
+And another post here."></textarea>
+      <div style="display:flex; align-items:center; gap:10px; margin-top:11px; flex-wrap:wrap;">
+        <button class="btn btn-primary" type="submit">Add posts</button>
+        <span class="pastehint" style="margin:0;">
+          One post per link &mdash; text goes on the lines below it.
+          Comments are drafted as soon as you add them.
+        </span>
+      </div>
+    </form>
+  </div>
+
+  {% if engage %}
+    <form method="post" action="/linkedin/draft" style="margin:14px 0;">
+      <button class="btn btn-sm" type="submit" {% if state.running %}disabled{% endif %}>
+        &#10024; Draft missing comments
+      </button>
+      <button class="btn btn-sm btn-ghost" type="submit" name="force" value="1"
+              {% if state.running %}disabled{% endif %}>Redraft all</button>
+    </form>
+
+    {% for p in engage %}
+      <div class="xpost {% if p.done %}done{% endif %}">
+        <div class="xhead">
+          {% if p.who %}
+            <span class="xauthor">{{ p.who }}</span>
+          {% else %}
+            <span class="xauthor nohandle">no author &mdash; paste the post link too</span>
+          {% endif %}
+          <span class="xage">added {{ p.added_at }}</span>
+        </div>
+
+        <div class="xtext">{{ p.text }}</div>
+
+        {% if p.url %}
+          <a class="xlink" href="{{ p.url }}" target="_blank" rel="noopener noreferrer">{{ p.url }}</a>
+        {% endif %}
+
+        {% if p.comment %}
+          <div class="xreply">
+            <div class="lbl">
+              Suggested comment{% if p.who %} on <span class="toh">{{ p.who }}</span>'s post{% endif %}
+            </div>
+            <div class="body">{{ p.comment }}</div>
+            <div class="wc">{{ p.comment.split()|length }} words</div>
+          </div>
+        {% elif state.running %}
+          <div class="xwait"><span class="pulse"></span> Drafting your comment&hellip;</div>
+        {% else %}
+          <div class="xnone">No comment drafted yet &mdash; press <b>Draft missing comments</b>.</div>
+        {% endif %}
+
+        <div class="xactions">
+          {% if p.url %}
+            <a class="btn btn-sm btn-primary" href="{{ p.url }}"
+               target="_blank" rel="noopener noreferrer">&#128279; Go to post</a>
+          {% endif %}
+          {% if p.comment %}
+            <button class="btn btn-sm copybtn" type="button"
+                    onclick="copyText(this, {{ p.comment | tojson }})">&#128203; Copy comment</button>
+          {% endif %}
+
+          <form class="inline" method="post" action="/linkedin/commented/{{ p.post_id }}">
+            <label class="donecheck {% if p.done %}on{% endif %}">
+              <input type="checkbox" {% if p.done %}checked{% endif %}
+                     onchange="this.form.submit()">
+              {% if p.done %}Commented{% else %}I have commented{% endif %}
+            </label>
+          </form>
+
+          <form class="inline" method="post" action="/linkedin/redraft/{{ p.post_id }}"
+                style="margin-left:auto;">
+            <button class="btn btn-sm btn-ghost" type="submit">&#8635; Redraft</button>
+          </form>
+          <form class="inline" method="post" action="/linkedin/remove/{{ p.post_id }}"
+                onsubmit="return confirm('Delete this post?');">
+            <button class="btn btn-sm btn-trash" type="submit">&#128465; Delete</button>
+          </form>
+        </div>
+      </div>
+    {% endfor %}
+  {% else %}
+    <div class="panel empty" style="margin-top:14px;">
+      <div class="big">&#128172;</div>
+      <p>Nothing to comment on yet. Paste a LinkedIn post above.</p>
+    </div>
+  {% endif %}
+
   <script>
     function copyText(btn, text) {
       navigator.clipboard.writeText(text).then(function () {
         var was = btn.textContent;
         btn.textContent = 'Copied';
         btn.classList.add('done');
-        setTimeout(function () {
-          btn.textContent = was;
-          btn.classList.remove('done');
-        }, 1600);
+        setTimeout(function () { btn.textContent = was; btn.classList.remove('done'); }, 1600);
       });
     }
   </script>
