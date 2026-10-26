@@ -2495,11 +2495,16 @@ YOUTUBE_PAGE = """
 
   {% if rows %}
     <div class="tilerow">
+      <div class="tile accent">
+        <div class="k">Subscribers</div>
+        <div class="v">{{ '{:,}'.format(chan.subscribers|int) if chan.subscribers else '-' }}</div>
+        {% if chan.video_count %}<div class="s">channel total</div>{% endif %}
+      </div>
       <div class="tile">
         <div class="k">Videos</div>
         <div class="v">{{ totals.videos }}</div>
       </div>
-      <div class="tile accent">
+      <div class="tile">
         <div class="k">Total views</div>
         <div class="v">{{ totals.views_fmt }}</div>
         <div class="s">{{ totals.avg_views }} average</div>
