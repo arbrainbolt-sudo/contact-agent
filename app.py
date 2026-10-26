@@ -1355,6 +1355,11 @@ STYLE = """
     .donecheck:hover { border-color:var(--green); color:#15803d; }
     .donecheck input { width:16px; height:16px; margin:0; cursor:pointer; accent-color:var(--green); }
     .donecheck.on { background:var(--green); border-color:var(--green); color:#fff; }
+    .xauthor.nohandle { color:var(--amber); font-weight:500; font-size:12.5px; }
+    .xreply .toh { color:var(--brand); font-weight:700; }
+    .xwait { margin-top:14px; padding:12px 15px; background:var(--amber-soft);
+             border-left:3px solid var(--amber); border-radius:0 8px 8px 0;
+             font-size:13.5px; color:#7c5b13; display:flex; align-items:center; gap:9px; }
     .btn-trash { color:var(--ink-faint); }
     .btn-trash:hover { background:var(--red-soft); border-color:#f0b4b4; color:var(--red); }
 
@@ -2473,7 +2478,11 @@ X_PAGE = """
   {% if state.running %}
     <div class="banner">
       <span class="pulse"></span>
-      <span>Drafting replies - this page refreshes every 4 seconds.</span>
+      <span>
+        <b>Working on it.</b> Reading each post and drafting a reply &mdash;
+        this usually takes 10&ndash;30 seconds per post. The page refreshes
+        itself every 4 seconds, so just leave it open.
+      </span>
     </div>
   {% endif %}
 
@@ -2528,6 +2537,8 @@ And another post here, separated by a blank line."></textarea>
           {% if p.author %}
             <a class="xauthor" href="https://x.com/{{ p.author }}"
                target="_blank" rel="noopener noreferrer">@{{ p.author }}</a>
+          {% else %}
+            <span class="xauthor nohandle">no handle &mdash; paste the post link too</span>
           {% endif %}
           {% if p.age %}<span class="xage">{{ p.age }}</span>{% endif %}
           {% if p.likes or p.reposts or p.replies %}
@@ -2547,12 +2558,16 @@ And another post here, separated by a blank line."></textarea>
 
         {% if p.comment %}
           <div class="xreply">
-            <div class="lbl">Suggested reply</div>
+            <div class="lbl">
+              Suggested reply{% if p.author %} to <span class="toh">@{{ p.author }}</span>{% endif %}
+            </div>
             <div class="body">{{ p.comment }}</div>
             <div class="wc">{{ p.comment.split()|length }} words</div>
           </div>
+        {% elif state.running %}
+          <div class="xwait"><span class="pulse"></span> Drafting your reply&hellip;</div>
         {% else %}
-          <div class="xnone">No reply drafted yet - press Draft comments above.</div>
+          <div class="xnone">No reply drafted yet &mdash; press <b>Draft comments</b> above.</div>
         {% endif %}
 
         <div class="xactions">
@@ -2563,6 +2578,13 @@ And another post here, separated by a blank line."></textarea>
           {% if p.comment %}
             <button class="btn btn-sm copybtn" type="button"
                     onclick="copyText(this, {{ p.comment | tojson }})">&#128203; Copy reply</button>
+            {% if p.author %}
+              <button class="btn btn-sm copybtn" type="button"
+                      title="Copies the reply with @{{ p.author }} in front"
+                      onclick="copyText(this, {{ ('@' ~ p.author ~ ' ' ~ p.comment) | tojson }})">
+                &#128203; Copy with @{{ p.author }}
+              </button>
+            {% endif %}
           {% endif %}
 
           <form class="inline" method="post" action="/x/commented/{{ p.post_id }}">

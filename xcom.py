@@ -183,20 +183,47 @@ def add_post(url, text, author="", posted_at="", log=print):
 
 
 def add_bulk(blob, log=print):
-    """Several posts at once. Blocks separated by a blank line, link first."""
+    """Several posts at once.
+
+    A new post starts at each x.com/<handle>/status/<id> link; every line
+    after it belongs to that post. Splitting on blank lines instead would
+    break any post that has a paragraph break in it - which most do.
+    """
+    blob = (blob or "").strip()
+    if not blob:
+        return 0
+
+    lines = blob.splitlines()
+    blocks, current = [], None
+
+    for line in lines:
+        if URL_RE.search(line):
+            if current:
+                blocks.append(current)
+            current = {"url": URL_RE.search(line).group(0), "lines": []}
+            # text can also sit on the same line as the link
+            trailing = URL_RE.sub("", line).strip()
+            if trailing:
+                current["lines"].append(trailing)
+        elif current is not None:
+            current["lines"].append(line)
+        elif line.strip():
+            # text before any link - treat it as one post with no URL
+            current = {"url": "", "lines": [line]}
+
+    if current:
+        blocks.append(current)
+
     added = 0
-    for block in re.split(r"\n\s*\n", blob or ""):
-        block = block.strip()
-        if not block:
+    for b in blocks:
+        text = "\n".join(b["lines"]).strip()
+        text = re.sub(r"\n{3,}", "\n\n", text)      # tidy runs of blank lines
+        if not b["url"] and not text:
             continue
-        lines = [l.strip() for l in block.splitlines() if l.strip()]
-        url = next((l for l in lines if URL_RE.search(l)), "")
-        text = " ".join(l for l in lines if l != url).strip()
-        if not url and not text:
-            continue
-        if add_post(url, text, log=log):
+        if add_post(b["url"], text, log=log):
             added += 1
-    log(f"   added {added} post(s)")
+
+    log(f"   added {added} post(s) from {len(blocks)} block(s)")
     return added
 
 
