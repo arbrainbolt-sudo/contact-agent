@@ -547,18 +547,22 @@ def draft_li_comment(post, log=print):
     who = pretty_author(post.get("author", ""))
     whose = f"{who}'s" if who else "someone's"
 
-    prompt = f"""Draft a comment on {whose} LinkedIn post.
+     prompt = f"""Draft a comment on {whose} LinkedIn post.
 
 THE POST:
 {text[:1500]}
 
-You are commenting as a founder who builds AI hiring and candidate vetting
-technology. He is an operator - practical, sceptical of hype, more interested
-in what something means than in what was announced.
+Whatever the subject is, you understand it properly - how it actually works,
+where it tends to break, and what most people miss about it. You explain things
+in plain words, the way you would to a smart friend who works in another field.
 
 The comment must:
-- Add something of his own. A specific angle, a counterpoint, something he has
-  seen in practice, or a question worth answering.
+- Show real understanding of the subject. Name the mechanism, the trade-off, the
+  knock-on effect, or the thing the post leaves out. That depth is the point.
+- Use simple, everyday language. Short sentences. No jargon, no buzzwords. If a
+  technical term is unavoidable, explain it in a few plain words.
+- Add something of your own: an angle, a counterpoint, something you have seen
+  happen, or a question worth answering.
 - Be 30 to 60 words. Long enough to say something, short enough to read.
 - Sound like a person thinking out loud, not a brand account.
 - Stay on what the post actually says. Do not invent facts or numbers.
@@ -567,7 +571,8 @@ Never do these:
 - No "Great post", "Well said", "Thanks for sharing", "Couldn't agree more",
   "This is so important", "Spot on".
 - No emoji, no hashtags.
-- No pitching his company. He is joining a conversation, not advertising.
+- Do not mention hiring, recruiting or your own work unless the post is about it.
+- Do not promote anything. You are joining a conversation.
 - Do not open by naming the author.
 
 Reply with ONLY this JSON:

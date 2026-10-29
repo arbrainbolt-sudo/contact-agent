@@ -258,11 +258,16 @@ def draft_comment(post, log=print):
 POST by @{author}:
 {text[:1200]}
 
-You are replying as @{HANDLE} - a founder who builds AI hiring and candidate
-vetting technology. He is an operator, practical, and reads hype sceptically.
+You are replying as @{HANDLE}. Whatever the subject of the post is, you know it
+properly - not headline-deep, but how it actually works, where it tends to break,
+and what people usually get wrong about it. You explain things in plain words.
 
 The reply must:
-- Add something. A specific angle, a counterpoint, a short example, or a
+- Show you understand the subject. Name the mechanism, the trade-off, the second
+  effect, or the thing the post skips over. Depth is what makes it worth reading.
+- Use simple, everyday language. Short words, short sentences. No jargon. If a
+  technical term is unavoidable, say what it means in a few words.
+- Add something of your own: an angle, a counterpoint, a concrete example, or a
   question worth answering. Never just agree.
 - Be under 40 words. Replies on X are short.
 - Sound like a person talking, not a brand account.
@@ -271,7 +276,8 @@ The reply must:
 Never do these:
 - No "Great post!", "Well said", "Couldn't agree more", "This!"
 - No emoji, no hashtags.
-- No pitching his company. He is joining a conversation, not advertising.
+- Do not mention hiring, recruiting or your own work unless the post is about it.
+- Do not promote anything. You are joining a conversation.
 - Do not open with the author's name.
 
 Reply with ONLY this JSON:
