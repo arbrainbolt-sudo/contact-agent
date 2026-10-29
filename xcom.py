@@ -193,31 +193,25 @@ def add_bulk(blob, log=print):
     if not blob:
         return 0
 
-    lines = blob.splitlines()
     blocks, current = [], None
-
-    for line in lines:
+    for line in blob.splitlines():
         if URL_RE.search(line):
             if current:
                 blocks.append(current)
             current = {"url": URL_RE.search(line).group(0), "lines": []}
-            # text can also sit on the same line as the link
             trailing = URL_RE.sub("", line).strip()
             if trailing:
                 current["lines"].append(trailing)
         elif current is not None:
             current["lines"].append(line)
         elif line.strip():
-            # text before any link - treat it as one post with no URL
             current = {"url": "", "lines": [line]}
-
     if current:
         blocks.append(current)
 
     added = 0
     for b in blocks:
-        text = "\n".join(b["lines"]).strip()
-        text = re.sub(r"\n{3,}", "\n\n", text)      # tidy runs of blank lines
+        text = re.sub(r"\n{3,}", "\n\n", "\n".join(b["lines"]).strip())
         if not b["url"] and not text:
             continue
         if add_post(b["url"], text, log=log):
@@ -296,13 +290,12 @@ Reply with ONLY this JSON:
     # Free models often ignore "reply with JSON" and just write the reply.
     # Use it rather than throwing a perfectly good sentence away.
     if not comment:
-        text_out = raw.strip()
-        text_out = re.sub(r"^```(?:json)?|```$", "", text_out).strip()
-        text_out = re.sub(r'^\s*\{.*?"comment"\s*:\s*"?', "", text_out, flags=re.S)
-        text_out = text_out.rstrip('"}').strip()
-        text_out = text_out.strip('"').strip()
-        if 3 < len(text_out) < 600:
-            comment = text_out
+        out = raw.strip()
+        out = re.sub(r"^```(?:json)?|```$", "", out).strip()
+        out = re.sub(r'^\s*\{.*?"comment"\s*:\s*"?', "", out, flags=re.S)
+        out = out.rstrip('"}').strip().strip('"').strip()
+        if 3 < len(out) < 600:
+            comment = out
             log(f"   @{author}: used plain-text reply ({len(comment.split())} words)")
 
     if not comment:

@@ -389,8 +389,6 @@ COMMENT_FIELDS = ["post_id", "author", "url", "text", "added_at",
 COMMENT_MAX_AGE_DAYS = int(os.getenv("LI_MAX_AGE_DAYS", "7"))
 COMMENT_TOP_N = int(os.getenv("LI_TOP_N", "15"))
 
-# linkedin.com/posts/<author>_<slug>-activity-<id>-<hash>
-# linkedin.com/feed/update/urn:li:activity:<id>
 # The author slug sits before the first underscore:
 #   /posts/<author>_<post-slug>-activity-<id>-<hash>
 LI_POSTS_RE = re.compile(
@@ -539,7 +537,7 @@ def comment_delete(post_id):
 # ---------------------------------------------------------------- drafting
 
 def draft_li_comment(post, log=print):
-    """One LinkedIn comment, in his voice."""
+    """One LinkedIn comment - plain language, real understanding of the topic."""
     text = (post.get("text") or "").strip()
     if not text:
         return ""
@@ -547,7 +545,7 @@ def draft_li_comment(post, log=print):
     who = pretty_author(post.get("author", ""))
     whose = f"{who}'s" if who else "someone's"
 
-     prompt = f"""Draft a comment on {whose} LinkedIn post.
+    prompt = f"""Draft a comment on {whose} LinkedIn post.
 
 THE POST:
 {text[:1500]}
