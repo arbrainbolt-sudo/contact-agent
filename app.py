@@ -592,6 +592,7 @@ def x_page():
     return render_template_string(
         X_PAGE,
         posts=xcom.recent(),
+        history=xcom.history(15),
         total=len(xcom.all_posts()),
         handle=xcom.HANDLE,
         max_age=xcom.MAX_AGE_DAYS,
@@ -1418,6 +1419,15 @@ STYLE = """
     .xwait { margin-top:14px; padding:12px 15px; background:var(--amber-soft);
              border-left:3px solid var(--amber); border-radius:0 8px 8px 0;
              font-size:13.5px; color:#7c5b13; display:flex; align-items:center; gap:9px; }
+                 .histrow { padding:14px 20px; border-bottom:1px solid var(--line-soft); }
+    .histrow:last-child { border-bottom:none; }
+    .histmeta { display:flex; align-items:center; gap:10px; margin-bottom:7px; flex-wrap:wrap; }
+    .histmeta .xage { font-variant-numeric:tabular-nums; }
+    .histlink { font-size:12px; color:var(--accent-dark); text-decoration:none; }
+    .histlink:hover { text-decoration:underline; }
+    .histreply { font-size:13.5px; line-height:1.55; color:var(--ink);
+                 padding-left:11px; border-left:3px solid var(--green); }
+    .histpost { font-size:12px; color:var(--ink-faint); margin-top:7px; line-height:1.5; }
     .btn-trash { color:var(--ink-faint); }
     .btn-trash:hover { background:var(--red-soft); border-color:#f0b4b4; color:var(--red); }
 
@@ -2785,7 +2795,41 @@ And another post here, separated by a blank line."></textarea>
       </p>
     </div>
   {% endif %}
+  {% if history %}
+    <div class="sectionhead" style="margin-top:34px;">
+      <h2>Replies you have made</h2>
+      <span class="counts">last {{ history|length }}</span>
+    </div>
 
+    <div class="panel">
+      {% for p in history %}
+        <div class="histrow">
+          <div class="histmeta">
+            {% if p.author %}
+              <a class="xauthor" href="https://x.com/{{ p.author }}"
+                 target="_blank" rel="noopener noreferrer">@{{ p.author }}</a>
+            {% endif %}
+            <span class="xage">{{ p.marked }}</span>
+            {% if p.url %}
+              <a class="histlink" href="{{ p.url }}"
+                 target="_blank" rel="noopener noreferrer">post &#8599;</a>
+            {% endif %}
+            <form class="inline" method="post" action="/x/commented/{{ p.post_id }}"
+                  style="margin-left:auto;">
+              <button class="btn btn-sm btn-ghost" type="submit"
+                      title="Untick - puts it back on the list">undo</button>
+            </form>
+          </div>
+          {% if p.comment %}
+            <div class="histreply">{{ p.comment }}</div>
+          {% endif %}
+          {% if p.text %}
+            <div class="histpost">on: {{ p.text[:140] }}{% if p.text|length > 140 %}&hellip;{% endif %}</div>
+          {% endif %}
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
   <script>
     function copyText(btn, text) {
       navigator.clipboard.writeText(text).then(function () {

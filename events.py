@@ -916,7 +916,8 @@ PAGE = """
       <a href="/news">AI News</a>
       <a href="/crm">CRM</a>
       <a href="/linkedin">LinkedIn Post</a>
-              <a href="/youtube">YouTube</a>
+      <a href="/youtube">YouTube</a>
+      <a href="/x">X</a>
       <a class="on" href="/events">Events</a>
     </nav>
   </div>
