@@ -136,13 +136,36 @@ def recent(limit=None):
     return live[:(limit or TOP_N)]
 
 
+def history(limit=15):
+    """The last replies you ticked as done, newest first, any age."""
+    rows = [r for r in all_posts()
+            if str(r.get("commented", "")).lower() in ("yes", "1", "true")]
+    out = []
+    for r in rows:
+        item = dict(r)
+        item["who"] = r.get("author", "")
+        # when you ticked it is more useful here than when it was posted
+        item["marked"] = (r.get("comment_at") or r.get("added_at") or "")
+        item["age"] = age_label(r.get("posted_at"))
+        out.append(item)
+
+    out.sort(key=lambda x: x["marked"], reverse=True)
+    return out[:limit]
+
+
 def purge_old(log=print):
     """Drop anything well past the window so the sheet stays small."""
     cutoff = _now() - timedelta(days=PURGE_AFTER_DAYS)
     rows = all_posts()
-    kept = [r for r in rows
-            if not (_parse_when(r.get("posted_at")) and
-                    _parse_when(r.get("posted_at")) < cutoff)]
+
+    def expired(r):
+        # anything you replied to is kept, so the history survives
+        if str(r.get("commented", "")).lower() in ("yes", "1", "true"):
+            return False
+        when = _parse_when(r.get("posted_at"))
+        return bool(when and when < cutoff)
+
+    kept = [r for r in rows if not expired(r)]
     if len(kept) != len(rows):
         save_all(kept)
         log(f"   purged {len(rows) - len(kept)} old posts")
