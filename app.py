@@ -1228,6 +1228,37 @@ STYLE = """
     .boxrow { display:grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 24px; }
     @media (max-width: 1050px) { .boxrow { grid-template-columns: 1fr; } }
 
+    /* CRM page: table on the left, action boxes in a thin sticky right column */
+    .crmwrap {
+      display:grid; grid-template-columns: minmax(0, 1fr) 320px;
+      gap: 20px; align-items: start; margin-top: 20px;
+    }
+    .crmmain { grid-column: 1; grid-row: 1; min-width: 0; }
+    .crmside {
+      grid-column: 2; grid-row: 1;
+      display:flex; flex-direction:column; gap: 16px;
+      position: sticky; top: 14px;
+    }
+    .crmside .boxhead { padding: 11px 13px; gap: 7px; }
+    .crmside .boxhead h2 { font-size: 13px; line-height: 1.3; }
+    .crmside .boxhead .icon { font-size: 15px; }
+    .crmside .boxhead .n { font-size: 11px; padding: 2px 8px; }
+    .crmside .boxscroll {
+      max-height: calc(50vh - 130px); min-height: 90px; padding: 2px 13px 10px;
+    }
+    .crmside .boxempty { padding: 18px 13px; font-size: 12.5px; }
+    .crmside .boxnote { padding: 9px 13px; line-height: 1.5; }
+    .crmside .boxnote form { flex-wrap: wrap; gap: 7px; }
+    .crmside .sugg .action { font-size: 12.5px; }
+    .crmside .boxitem .what { font-size: 12.5px; }
+    .crmside .boxitem .who, .crmside .sugg .who { font-size: 13px; }
+    @media (max-width: 1250px) {
+      .crmwrap { grid-template-columns: 1fr; }
+      .crmmain, .crmside { grid-column: auto; grid-row: auto; }
+      .crmside { position: static; }
+      .crmside .boxscroll { max-height: 300px; }
+    }
+
     .actionbox {
       background: var(--surface); border:1px solid var(--line); border-radius: var(--radius);
       box-shadow: var(--shadow); overflow: hidden; display:flex; flex-direction:column;
@@ -1840,7 +1871,9 @@ CRM_PAGE = """
 """ + HEADER + """
 <div class="shell">
 
-  <div class="boxrow">
+  <div class="crmwrap">
+
+    <aside class="crmside">
 
     <div class="actionbox box-calls">
       <div class="boxhead">
@@ -1950,7 +1983,9 @@ CRM_PAGE = """
       </div>
     </div>
 
-  </div>
+    </aside>
+
+    <div class="crmmain">
 
   {% if state.running %}
     <div class="banner">
@@ -2120,6 +2155,9 @@ CRM_PAGE = """
       </p>
     </div>
   {% endif %}
+
+    </div><!-- /crmmain -->
+  </div><!-- /crmwrap -->
 
   <script>
     function autogrow(el) {
