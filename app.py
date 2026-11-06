@@ -4,6 +4,7 @@ import os
 import math
 import time
 import threading
+import contextlib
 from datetime import datetime, date, timedelta
 from urllib.parse import urlparse
 
@@ -44,19 +45,19 @@ CRM_DATE_COL = os.getenv("CRM_DATE_COL", "")                     # or match it b
 CRM_TASK_COL_NUM = int(os.getenv("CRM_TASK_COL_NUM", "7"))       # column G: the action item itself
 CRM_TASK_COL = os.getenv("CRM_TASK_COL", "")                     # or match it by header name instead
 CRM_PRIORITY_HEADER = os.getenv("CRM_PRIORITY_HEADER", "Priority")   # colour swatch column
-CRM_PRIORITY_COL_NUM = int(os.getenv("CRM_PRIORITY_COL_NUM", "8"))   # column H
+CRM_PRIORITY_COL_NUM = int(os.getenv("CRM_PRIORITY_COL_NUM", "9"))   # column I
 
 # click order of the swatch, the word written to the sheet, and sort order
 PRIORITY_COLOURS = ("blue", "red", "yellow", "green")
-PRIORITY_LABELS = {"blue": "Cold", "red": "Hot", "yellow": "Warm", "green": "Room Temp"}
+PRIORITY_LABELS = {"blue": "Blue", "red": "Red", "yellow": "Yellow", "green": "Green"}
 PRIORITY_ORDER = {"red": 0, "yellow": 1, "green": 2, "blue": 3}
 
-PRIORITY_LOOKUP = {}
-for _colour, _label in PRIORITY_LABELS.items():
-    PRIORITY_LOOKUP[_colour] = _colour              # older rows stored the colour name
-    PRIORITY_LOOKUP[_label.lower()] = _colour
-PRIORITY_LOOKUP["roomtemp"] = "green"
-PRIORITY_LOOKUP["room temperature"] = "green"
+# both the colour names and the older Hot/Warm wording read back correctly
+PRIORITY_LOOKUP = {"hot": "red", "warm": "yellow", "cold": "blue",
+                   "room temp": "green", "roomtemp": "green",
+                   "room temperature": "green"}
+for _colour in PRIORITY_COLOURS:
+    PRIORITY_LOOKUP[_colour] = _colour
 LINKEDIN_TIME = os.getenv("LINKEDIN_TIME", "07:00")
 YOUTUBE_TIME = os.getenv("YOUTUBE_TIME", "07:15")           # daily stats refresh         # daily post, 24h clock
 
@@ -217,6 +218,67 @@ def find_priority_col(headers):
         if (header or "").strip().lower() == wanted:
             return i + 1
     return 0
+
+
+def _store_lock():
+    """Reuse store's own write lock when it has one, so direct writes stay safe."""
+    for name in ("_LOCK", "LOCK", "_lock", "lock"):
+        candidate = getattr(store, name, None)
+        if hasattr(candidate, "__enter__"):
+            return candidate
+    return contextlib.nullcontext()
+
+
+def write_cells(sheet, cells):
+    """Write (row, col, value) triples, check they stuck, and force them through if not.
+
+    store.update_cell is tried first. Some workbooks will not accept a write to a
+    column past the last one in use, which fails silently, so anything that does not
+    read back gets written straight into the file with openpyxl.
+    """
+    for excel_row, col, value in cells:
+        try:
+            store.update_cell(sheet, excel_row, col, value)
+        except Exception as exc:
+            print(f"update_cell failed for {sheet}!{col_letter(col)}{excel_row}: {exc}")
+
+    missed = [c for c in cells if not cell_reads_back(sheet, *c)]
+    if not missed:
+        return []
+
+    names = ", ".join(f"{col_letter(c)}{r}" for r, c, _ in missed)
+    print(f"{len(missed)} cell(s) did not save through store.update_cell ({names}); "
+          f"writing them into {store.XLSX_FILE} directly")
+    try:
+        import openpyxl
+        with _store_lock():
+            book = openpyxl.load_workbook(store.XLSX_FILE)
+            page = book[sheet]
+            for excel_row, col, value in missed:
+                page.cell(row=excel_row, column=col).value = value
+            book.save(store.XLSX_FILE)
+    except Exception as exc:
+        print(f"direct write to {store.XLSX_FILE} failed: {exc}")
+        return missed
+
+    still = [c for c in missed if not cell_reads_back(sheet, *c)]
+    for excel_row, col, value in still:
+        print(f"WARNING: {sheet}!{col_letter(col)}{excel_row} still does not hold {value!r}")
+    return still
+
+
+def cell_reads_back(sheet, excel_row, col, value):
+    """True when the sheet really holds this value now."""
+    headers, rows = store.read_sheet_auto(sheet)
+    if excel_row == 1:
+        return len(headers) >= col and (headers[col - 1] or "").strip() == value.strip()
+    header = headers[col - 1] if len(headers) >= col else ""
+    if not header:
+        return False
+    for row in rows:
+        if row.get("_row", 0) == excel_row:
+            return (row.get(header, "") or "").strip() == value.strip()
+    return False
 
 
 def priority_column(headers):
@@ -646,14 +708,14 @@ def crm_page():
     # Priority lives in column H unless that column is already in use
     prio_col, prio_note = priority_column(headers) if headers else (0, "")
     if prio_col and not find_priority_col(headers):
-        try:
-            store.update_cell(sheet, 1, prio_col, CRM_PRIORITY_HEADER)
-            headers, all_rows = store.read_sheet_auto(sheet)
+        failed = write_cells(sheet, [(1, prio_col, CRM_PRIORITY_HEADER)])
+        if failed:
+            prio_note = (f"Could not write the {CRM_PRIORITY_HEADER} header into "
+                         f"{col_letter(prio_col)}1 of {sheet} - see the terminal.")
+        else:
             print(f"added a {CRM_PRIORITY_HEADER} column at "
                   f"{col_letter(prio_col)}1 on sheet {sheet}")
-        except Exception as exc:
-            prio_note = f"Could not write the Priority header to {sheet}: {exc}"
-            print(prio_note)
+            headers, all_rows = store.read_sheet_auto(sheet)
 
     prio_key = headers[prio_col - 1] if 0 < prio_col <= len(headers) else ""
 
@@ -819,7 +881,8 @@ def crm_save():
         date_num = (headers.index(date_key) + 1) if date_key in headers else 0
         prio_num, _ = priority_column(headers)
         if prio_num and not find_priority_col(headers):
-            store.update_cell(sheet, 1, prio_num, CRM_PRIORITY_HEADER)
+            write_cells(sheet, [(1, prio_num, CRM_PRIORITY_HEADER)])
+            headers, rows = store.read_sheet_auto(sheet)
 
         current = {}
         for row in rows:
@@ -847,20 +910,12 @@ def crm_save():
             if new == old:
                 continue
 
-            store.update_cell(sheet, excel_row, col, new)
             wrote.append((excel_row, col, new))
             saved += 1
 
-        # read the sheet back and make sure the writes actually landed
+        # write them, check each one stuck, and force through anything that did not
         if wrote:
-            fresh_headers, fresh_rows = store.read_sheet_auto(sheet)
-            by_row = {r.get("_row", 0): r for r in fresh_rows}
-            for excel_row, col, value in wrote:
-                header = fresh_headers[col - 1] if len(fresh_headers) >= col else ""
-                got = (by_row.get(excel_row, {}).get(header, "") or "").strip()
-                if got != value:
-                    print(f"WARNING: {sheet}!{col_letter(col)}{excel_row} should now be "
-                          f"{value!r} but reads back as {got!r}")
+            write_cells(sheet, wrote)
 
     return redirect(url_for("crm_page",
                             sheet=sheet,
