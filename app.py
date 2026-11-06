@@ -1354,14 +1354,17 @@ STYLE = """
     .muted { color: var(--ink-faint); font-weight: 400; }
     .datecell { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
 
-    /* the wide column (Activity by default) - takes whatever width is left over */
-    th.wide4 { min-width: 170px; }
+    /* the wide column (Activity by default) - a fixed 45-character box */
+    th.wide4 { min-width: calc(45ch + 42px); }
     td.wide4 {
-      min-width: 170px; width: 40%;
-      white-space: normal; word-break: break-word; line-height: 1.55;
-      vertical-align: top;
+      width: 1%; min-width: calc(45ch + 42px);
+      white-space: nowrap; line-height: 1.55; vertical-align: top;
     }
-    td.wide4 textarea.cellin { overflow: hidden; min-height: 0; }
+    td.wide4 textarea.cellin {
+      width: 45ch; min-width: 45ch; max-width: 45ch;
+      overflow: hidden; min-height: 0;
+      white-space: pre-wrap; word-break: break-word;
+    }
 
     .badge {
       display:inline-block; font-size: 11px; font-weight: 600;
@@ -1590,7 +1593,7 @@ STYLE = """
       font-size: 13px; line-height: 1.45; display: block;
     }
     /* keep ordinary CRM cells from hogging the width and pushing the table sideways */
-    .crmmain tbody td { max-width: 190px; word-break: break-word; }
+    .crmmain tbody td { max-width: 140px; word-break: break-word; }
     .crmmain tbody td.taskcell, .crmmain tbody td.wide4 { max-width: none; }
     .crmmain thead th { white-space: normal; }
     td.taskcell textarea.cellin { overflow: hidden; min-height: 0; line-height: 1.45; }
@@ -2441,7 +2444,8 @@ CRM_PAGE = """
               {% for col_num, key, label in columns %}
                 <td class="{% if wide_col and wide_col == key.lower() %}wide4{% endif %}">
                   {% if wide_col and wide_col == key.lower() %}
-                    <textarea form="addform" name="col_{{ col_num }}" rows="3" placeholder="{{ label }}..."></textarea>
+                    <textarea form="addform" class="cellin" name="col_{{ col_num }}"
+                              rows="3" cols="45" placeholder="{{ label }}..."></textarea>
                   {% elif date_col and col_num == date_col %}
                     <input form="addform" class="whenin" type="date" name="col_{{ col_num }}">
                   {% elif prio_col and col_num == prio_col %}
@@ -2477,7 +2481,7 @@ CRM_PAGE = """
                   <td class="wide4">
                     <textarea class="cellin autogrow" form="crmsave"
                               name="cell_{{ row._row }}_{{ col_num }}"
-                              rows="{{ value | rows_for }}"
+                              rows="{{ value | rows_for(45, 3, 30) }}" cols="45"
                               placeholder="Add activity..."
                               oninput="autogrow(this); markDirty();">{{ value }}</textarea>
                   </td>
