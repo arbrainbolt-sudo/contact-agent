@@ -608,10 +608,17 @@ def crm_page():
     # the Priority column is created once, on the first visit to a sheet without one
     prio_col = find_priority_col(headers)
     if headers and not prio_col:
-        store.update_cell(sheet, 1, len(headers) + 1, CRM_PRIORITY_HEADER)
-        headers, all_rows = store.read_sheet_auto(sheet)
-        prio_col = find_priority_col(headers)
-    prio_key = headers[prio_col - 1] if prio_col else ""
+        target = len(headers) + 1
+        try:
+            store.update_cell(sheet, 1, target, CRM_PRIORITY_HEADER)
+            headers, all_rows = store.read_sheet_auto(sheet)
+            prio_col = find_priority_col(headers)
+        except Exception as exc:
+            print(f"could not add a {CRM_PRIORITY_HEADER} column to {sheet}: {exc}")
+        # show the swatches regardless; the header gets written on the first save
+        prio_col = prio_col or target
+
+    prio_key = headers[prio_col - 1] if 0 < prio_col <= len(headers) else ""
 
     total = len(all_rows)
 
@@ -640,6 +647,11 @@ def crm_page():
                     columns.append(col)
                     shown_nums.append(num)
                     break
+
+    # the sheet may not carry a Priority header yet - show the column anyway
+    if prio_col and prio_col not in shown_nums:
+        columns.append((prio_col, prio_key or CRM_PRIORITY_HEADER, CRM_PRIORITY_HEADER))
+        shown_nums.append(prio_col)
 
     for col in all_cols[CRM_MAX_COLS:]:
         if wide and wide == col[1].strip().lower() and col[0] not in shown_nums:
@@ -768,6 +780,14 @@ def crm_save():
             date_key = find_col(headers, (), CRM_DATE_COL) or date_key
         date_num = (headers.index(date_key) + 1) if date_key in headers else 0
         prio_num = find_priority_col(headers)
+        if not prio_num:                       # first save on a sheet with no Priority header
+            try:
+                wanted = int(request.form.get("priocol", "0"))
+            except ValueError:
+                wanted = 0
+            if wanted > len(headers):
+                store.update_cell(sheet, 1, wanted, CRM_PRIORITY_HEADER)
+                prio_num = wanted
 
         current = {}
         for row in rows:
@@ -2386,6 +2406,7 @@ CRM_PAGE = """
       <input type="hidden" name="q" value="{{ q }}">
       <input type="hidden" name="sort" value="{{ sort }}">
       <input type="hidden" name="dir" value="{{ direction }}">
+      <input type="hidden" name="priocol" value="{{ prio_col }}">
     </form>
 
     <div class="savebar">
