@@ -44,10 +44,19 @@ CRM_DATE_COL = os.getenv("CRM_DATE_COL", "")                     # or match it b
 CRM_TASK_COL_NUM = int(os.getenv("CRM_TASK_COL_NUM", "7"))       # column G: the action item itself
 CRM_TASK_COL = os.getenv("CRM_TASK_COL", "")                     # or match it by header name instead
 CRM_PRIORITY_HEADER = os.getenv("CRM_PRIORITY_HEADER", "Priority")   # colour swatch column
+CRM_PRIORITY_COL_NUM = int(os.getenv("CRM_PRIORITY_COL_NUM", "8"))   # column H
 
-# click order of the priority swatch, and how urgent each colour is when sorting
+# click order of the swatch, the word written to the sheet, and sort order
 PRIORITY_COLOURS = ("blue", "red", "yellow", "green")
+PRIORITY_LABELS = {"blue": "Cold", "red": "Hot", "yellow": "Warm", "green": "Room Temp"}
 PRIORITY_ORDER = {"red": 0, "yellow": 1, "green": 2, "blue": 3}
+
+PRIORITY_LOOKUP = {}
+for _colour, _label in PRIORITY_LABELS.items():
+    PRIORITY_LOOKUP[_colour] = _colour              # older rows stored the colour name
+    PRIORITY_LOOKUP[_label.lower()] = _colour
+PRIORITY_LOOKUP["roomtemp"] = "green"
+PRIORITY_LOOKUP["room temperature"] = "green"
 LINKEDIN_TIME = os.getenv("LINKEDIN_TIME", "07:00")
 YOUTUBE_TIME = os.getenv("YOUTUBE_TIME", "07:15")           # daily stats refresh         # daily post, 24h clock
 
@@ -183,13 +192,26 @@ def iso_date(text):
 
 
 def priority_of(text):
-    """Cell text -> one of the four swatch colours. Anything unrecognised is blue."""
-    colour = (text or "").strip().lower()
-    return colour if colour in PRIORITY_COLOURS else PRIORITY_COLOURS[0]
+    """Cell text ('Hot', 'red', blank...) -> one of the four swatch colours."""
+    return PRIORITY_LOOKUP.get((text or "").strip().lower(), "blue")
+
+
+def priority_label(colour):
+    """Swatch colour -> the word written into the spreadsheet."""
+    return PRIORITY_LABELS.get(colour, PRIORITY_LABELS["blue"])
+
+
+def col_letter(number):
+    """1 -> A, 8 -> H, 27 -> AA."""
+    letters = ""
+    while number > 0:
+        number, rest = divmod(number - 1, 26)
+        letters = chr(65 + rest) + letters
+    return letters or "?"
 
 
 def find_priority_col(headers):
-    """Excel column number of the Priority column, or 0 when the sheet has none yet."""
+    """Excel column number of an existing Priority column, else 0."""
     wanted = CRM_PRIORITY_HEADER.strip().lower()
     for i, header in enumerate(headers):
         if (header or "").strip().lower() == wanted:
@@ -197,8 +219,24 @@ def find_priority_col(headers):
     return 0
 
 
+def priority_column(headers):
+    """Where Priority lives: (column number, warning). Column H unless that is taken."""
+    found = find_priority_col(headers)
+    if found:
+        return found, ""
+
+    target = CRM_PRIORITY_COL_NUM
+    taken = headers[target - 1].strip() if len(headers) >= target else ""
+    if taken:
+        spare = len(headers) + 1
+        return spare, (f"Column {col_letter(target)} already holds \"{taken}\", so Priority "
+                       f"was put in column {col_letter(spare)} instead.")
+    return target, ""
+
+
 app.jinja_env.filters["iso_date"] = iso_date
 app.jinja_env.filters["prio"] = priority_of
+app.jinja_env.filters["priolabel"] = priority_label
 
 
 def find_col(headers, hints, override="", exclude=()):
@@ -605,18 +643,17 @@ def crm_page():
 
     headers, all_rows = store.read_sheet_auto(sheet)
 
-    # the Priority column is created once, on the first visit to a sheet without one
-    prio_col = find_priority_col(headers)
-    if headers and not prio_col:
-        target = len(headers) + 1
+    # Priority lives in column H unless that column is already in use
+    prio_col, prio_note = priority_column(headers) if headers else (0, "")
+    if prio_col and not find_priority_col(headers):
         try:
-            store.update_cell(sheet, 1, target, CRM_PRIORITY_HEADER)
+            store.update_cell(sheet, 1, prio_col, CRM_PRIORITY_HEADER)
             headers, all_rows = store.read_sheet_auto(sheet)
-            prio_col = find_priority_col(headers)
+            print(f"added a {CRM_PRIORITY_HEADER} column at "
+                  f"{col_letter(prio_col)}1 on sheet {sheet}")
         except Exception as exc:
-            print(f"could not add a {CRM_PRIORITY_HEADER} column to {sheet}: {exc}")
-        # show the swatches regardless; the header gets written on the first save
-        prio_col = prio_col or target
+            prio_note = f"Could not write the Priority header to {sheet}: {exc}"
+            print(prio_note)
 
     prio_key = headers[prio_col - 1] if 0 < prio_col <= len(headers) else ""
 
@@ -739,6 +776,7 @@ def crm_page():
         date_col=date_col,
         task_col=task_col,
         prio_col=prio_col,
+        prio_note=prio_note,
         saved=saved,
         workbook=store.XLSX_FILE,
         backup=store.backup_info(),
@@ -779,20 +817,16 @@ def crm_save():
         if CRM_DATE_COL:
             date_key = find_col(headers, (), CRM_DATE_COL) or date_key
         date_num = (headers.index(date_key) + 1) if date_key in headers else 0
-        prio_num = find_priority_col(headers)
-        if not prio_num:                       # first save on a sheet with no Priority header
-            try:
-                wanted = int(request.form.get("priocol", "0"))
-            except ValueError:
-                wanted = 0
-            if wanted > len(headers):
-                store.update_cell(sheet, 1, wanted, CRM_PRIORITY_HEADER)
-                prio_num = wanted
+        prio_num, _ = priority_column(headers)
+        if prio_num and not find_priority_col(headers):
+            store.update_cell(sheet, 1, prio_num, CRM_PRIORITY_HEADER)
 
         current = {}
         for row in rows:
             for i, header in enumerate(headers):
                 current[(row.get("_row", 0), i + 1)] = (row.get(header, "") or "")
+
+        wrote = []                                  # (row, col, value) for the check below
 
         for field, posted in request.form.items():
             if not field.startswith("cell_"):
@@ -808,12 +842,25 @@ def crm_save():
             if col == date_num:
                 old = iso_date(old) or old          # compare like with like
             elif col == prio_num:
-                old = priority_of(old)
+                new = priority_label(priority_of(new))
+                old = priority_label(priority_of(old))
             if new == old:
                 continue
 
             store.update_cell(sheet, excel_row, col, new)
+            wrote.append((excel_row, col, new))
             saved += 1
+
+        # read the sheet back and make sure the writes actually landed
+        if wrote:
+            fresh_headers, fresh_rows = store.read_sheet_auto(sheet)
+            by_row = {r.get("_row", 0): r for r in fresh_rows}
+            for excel_row, col, value in wrote:
+                header = fresh_headers[col - 1] if len(fresh_headers) >= col else ""
+                got = (by_row.get(excel_row, {}).get(header, "") or "").strip()
+                if got != value:
+                    print(f"WARNING: {sheet}!{col_letter(col)}{excel_row} should now be "
+                          f"{value!r} but reads back as {got!r}")
 
     return redirect(url_for("crm_page",
                             sheet=sheet,
@@ -1613,6 +1660,10 @@ STYLE = """
       margin: 0 0 12px;
     }
     .savebar-bottom { margin: 14px 0 0; }
+    .warnline {
+      font-size: 12.5px; color: var(--amber); background: var(--amber-soft);
+      border-radius: 8px; padding: 8px 12px; margin-bottom: 12px;
+    }
     .savestate { font-size: 12.5px; color: var(--ink-faint); }
     .savestate.dirty { color: var(--amber); font-weight: 600; }
     .savedflash {
@@ -2395,7 +2446,7 @@ CRM_PAGE = """
     <span class="legend">
       <span><i class="dot prio-red"></i>Hot</span>
       <span><i class="dot prio-yellow"></i>Warm</span>
-      <span><i class="dot prio-green"></i>Room temp</span>
+      <span><i class="dot prio-green"></i>Room Temp</span>
       <span><i class="dot prio-blue"></i>Cold</span>
     </span>
     {% if hidden_count %}
@@ -2427,6 +2478,10 @@ CRM_PAGE = """
       <input type="hidden" name="dir" value="{{ direction }}">
       <input type="hidden" name="priocol" value="{{ prio_col }}">
     </form>
+
+    {% if prio_note %}
+      <div class="warnline">&#9888; {{ prio_note }}</div>
+    {% endif %}
 
     <div class="savebar">
       <button class="btn btn-primary" form="crmsave" type="submit" id="savebtn">
@@ -2465,9 +2520,9 @@ CRM_PAGE = """
                   {% elif date_col and col_num == date_col %}
                     <input form="addform" class="whenin" type="date" name="col_{{ col_num }}">
                   {% elif prio_col and col_num == prio_col %}
-                    <input type="hidden" form="addform" name="col_{{ col_num }}" value="blue">
-                    <button type="button" class="prio prio-blue"
-                            title="Priority: blue - click to change"
+                    <input type="hidden" form="addform" name="col_{{ col_num }}" value="Cold">
+                    <button type="button" class="prio prio-blue" data-colour="blue"
+                            title="Cold - click to change"
                             onclick="cyclePriority(this)"></button>
                   {% elif task_col and col_num == task_col %}
                     <textarea form="addform" class="taskin" name="col_{{ col_num }}"
@@ -2515,9 +2570,11 @@ CRM_PAGE = """
                   {% set colour = value | prio %}
                   <td class="priocell">
                     <input type="hidden" form="crmsave"
-                           name="cell_{{ row._row }}_{{ col_num }}" value="{{ colour }}">
+                           name="cell_{{ row._row }}_{{ col_num }}"
+                           value="{{ colour | priolabel }}">
                     <button type="button" class="prio prio-{{ colour }}"
-                            title="Priority: {{ colour }} - click to change"
+                            data-colour="{{ colour }}"
+                            title="{{ colour | priolabel }} - click to change"
                             onclick="cyclePriority(this)"></button>
                   </td>
                 {% elif task_col and col_num == task_col %}
@@ -2586,15 +2643,20 @@ CRM_PAGE = """
 
     var dirty = false;
 
-    var PRIORITY_COLOURS = ['blue', 'red', 'yellow', 'green'];
+    // click order, and the word written into the spreadsheet for each colour
+    var PRIORITY = [['blue', 'Cold'], ['red', 'Hot'], ['yellow', 'Warm'], ['green', 'Room Temp']];
 
     function cyclePriority(btn) {
+      var now = btn.getAttribute('data-colour') || 'blue';
+      var at = 0;
+      for (var i = 0; i < PRIORITY.length; i++) { if (PRIORITY[i][0] === now) { at = i; } }
+      var next = PRIORITY[(at + 1) % PRIORITY.length];
+
       var hidden = btn.parentNode.querySelector('input[type=hidden]');
-      var now = hidden ? hidden.value : 'blue';
-      var next = PRIORITY_COLOURS[(PRIORITY_COLOURS.indexOf(now) + 1) % PRIORITY_COLOURS.length];
-      if (hidden) { hidden.value = next; }
-      btn.className = 'prio prio-' + next;
-      btn.title = 'Priority: ' + next + ' - click to change';
+      if (hidden) { hidden.value = next[1]; }
+      btn.setAttribute('data-colour', next[0]);
+      btn.className = 'prio prio-' + next[0];
+      btn.title = next[1] + ' - click to change';
       markDirty();
     }
 
