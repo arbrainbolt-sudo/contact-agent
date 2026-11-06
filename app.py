@@ -39,8 +39,10 @@ CRM_MAX_COLS = int(os.getenv("CRM_MAX_COLS", "6"))          # hide columns 7 onw
 CRM_HIDE_COLS = {1}                    # column numbers never shown on the page
 CRM_SNO_COL = 2                        # which column holds the serial number
 CRM_COL_LABELS = {2: "S.No."}          # display-only header overrides
-CRM_ACTION_COL_NUM = int(os.getenv("CRM_ACTION_COL_NUM", "6"))   # column F: called action date and time
-CRM_ACTION_COL = os.getenv("CRM_ACTION_COL", "")                 # or match it by header name instead
+CRM_DATE_COL_NUM = int(os.getenv("CRM_DATE_COL_NUM", "6"))       # column F: action date (calendar picker)
+CRM_DATE_COL = os.getenv("CRM_DATE_COL", "")                     # or match it by header name instead
+CRM_TASK_COL_NUM = int(os.getenv("CRM_TASK_COL_NUM", "7"))       # column G: the action item itself
+CRM_TASK_COL = os.getenv("CRM_TASK_COL", "")                     # or match it by header name instead
 LINKEDIN_TIME = os.getenv("LINKEDIN_TIME", "07:00")
 YOUTUBE_TIME = os.getenv("YOUTUBE_TIME", "07:15")           # daily stats refresh         # daily post, 24h clock
 
@@ -169,6 +171,15 @@ def pretty_when(when, has_time):
     return shown.replace(" 0", " ").replace("- 0", "- ")
 
 
+def iso_date(text):
+    """Whatever the cell holds -> 'YYYY-MM-DD', which is what <input type=date> needs."""
+    when, _ = parse_when(text)
+    return when.strftime("%Y-%m-%d") if when else ""
+
+
+app.jinja_env.filters["iso_date"] = iso_date
+
+
 def find_col(headers, hints, override="", exclude=()):
     """Locate a column: exact override, then exact hint, then prefix, then contains."""
     pool = [h for h in headers if h not in exclude]
@@ -207,10 +218,14 @@ def crm_boxes(headers, rows):
     last_col = find_col(headers, LASTCONTACT_HINTS, os.getenv("CRM_LASTCONTACT_COL", ""))
     activity_col = find_col(headers, (CRM_WIDE_COL,), CRM_ACTIVITY_COL)
 
-    # "Called action date and time" - column F by position, or by header name.
-    action_col = headers[CRM_ACTION_COL_NUM - 1] if len(headers) >= CRM_ACTION_COL_NUM else ""
-    if CRM_ACTION_COL:
-        action_col = find_col(headers, (), CRM_ACTION_COL) or action_col
+    # Column F holds the action date, column G the action item - by position, or by header name.
+    date_col = headers[CRM_DATE_COL_NUM - 1] if len(headers) >= CRM_DATE_COL_NUM else ""
+    if CRM_DATE_COL:
+        date_col = find_col(headers, (), CRM_DATE_COL) or date_col
+
+    task_col = headers[CRM_TASK_COL_NUM - 1] if len(headers) >= CRM_TASK_COL_NUM else ""
+    if CRM_TASK_COL:
+        task_col = find_col(headers, (), CRM_TASK_COL) or task_col
 
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     cutoff = today - timedelta(days=CRM_STALE_DAYS)
@@ -220,37 +235,35 @@ def crm_boxes(headers, rows):
         org = (row.get(company_col, "") if company_col else "").strip()
         return (who or "(no name)"), org
 
-    # ---- box 1: scheduled calls read straight from the action date/time column
+    # ---- box 1: open action items - column F date, column G task.
+    # Anything dated before today is left out; newest date first.
     actions = []
     for row in rows:
-        raw = (row.get(action_col, "") if action_col else "").strip()
+        raw = (row.get(date_col, "") if date_col else "").strip()
         if not raw:
             continue
 
-        when, has_time = parse_when(raw)
-        day = when.replace(hour=0, minute=0, second=0, microsecond=0) if when else None
+        when, _ = parse_when(raw)
+        if not when:
+            continue                       # no readable date, so nothing to schedule by
 
-        if day is None:
-            status, days = "undated", None
-        elif day < today:
-            status, days = "overdue", (today - day).days
-        elif day == today:
-            status, days = "today", 0
-        else:
-            status, days = "upcoming", (day - today).days
+        day = when.replace(hour=0, minute=0, second=0, microsecond=0)
+        if day < today:
+            continue                       # already in the past
 
         who, org = label(row)
         actions.append({
             "who": who, "org": org,
             "raw": raw,
-            "when": when,
-            "shown": pretty_when(when, has_time) if when else raw,
-            "status": status,
-            "days": days,
+            "when": day,
+            "shown": pretty_when(day, False),
+            "task": (row.get(task_col, "") if task_col else "").strip(),
+            "status": "today" if day == today else "upcoming",
+            "days": (day - today).days,
             "row": row.get("_row", 0),
         })
 
-    actions.sort(key=lambda a: (a["when"] is None, a["when"] or today))
+    actions.sort(key=lambda a: a["when"], reverse=True)
 
     # ---- box 1 fallback: calls and follow-ups from columns
     followups = []
@@ -314,7 +327,7 @@ def crm_boxes(headers, rows):
         "cols": {
             "name": name_col, "company": company_col,
             "followup": followup_col, "due": due_col, "last": last_col,
-            "activity": activity_col, "action": action_col,
+            "activity": activity_col, "date": date_col, "task": task_col,
         },
     }
 
@@ -578,18 +591,27 @@ def crm_page():
     columns = all_cols[:CRM_MAX_COLS]
     wide = (boxes["cols"]["activity"] or CRM_WIDE_COL).strip().lower()
 
-    # excel column number of the "called action date and time" cell, so it can be edited
-    action_key = boxes["cols"]["action"]
-    action_col = (headers.index(action_key) + 1) if action_key in headers else 0
-    if action_col and action_col not in [c[0] for c in columns]:
-        for col in all_cols:
-            if col[0] == action_col:
-                columns.append(col)
-                break
+    # excel column numbers of the date (F) and action item (G) cells, so both can be edited
+    date_key = boxes["cols"]["date"]
+    task_key = boxes["cols"]["task"]
+    date_col = (headers.index(date_key) + 1) if date_key in headers else 0
+    task_col = (headers.index(task_key) + 1) if task_key in headers else 0
+
+    shown_nums = [c[0] for c in columns]
+    for num in (date_col, task_col):
+        if num and num not in shown_nums:
+            for col in all_cols:
+                if col[0] == num:
+                    columns.append(col)
+                    shown_nums.append(num)
+                    break
 
     for col in all_cols[CRM_MAX_COLS:]:
-        if wide and wide == col[1].strip().lower():
+        if wide and wide == col[1].strip().lower() and col[0] not in shown_nums:
             columns.append(col)
+            shown_nums.append(col[0])
+
+    columns.sort(key=lambda c: c[0])          # keep spreadsheet order
 
     # next serial number for the add row
     sno_key = headers[CRM_SNO_COL - 1] if len(headers) >= CRM_SNO_COL else ""
@@ -619,12 +641,23 @@ def crm_page():
         ("S.No.", sno_key or "_row"),
         ("Company", boxes["cols"]["company"]),
         ("Name", boxes["cols"]["name"]),
+        ("Action", task_key),
+        ("Date", date_key),
     ]
     sortable = [(label, col) for label, col in sortable if col]
 
     if sort == "_row":
         rows = sorted(rows, key=lambda r: r.get("_row", 0),
                       reverse=(direction == "desc"))
+    elif sort and sort == date_key:
+        # dates sort chronologically, blanks last whichever way round
+        far = datetime.max if direction == "asc" else datetime.min
+
+        def date_key_of(row):
+            when, _ = parse_when(row.get(sort, ""))
+            return when or far
+
+        rows = sorted(rows, key=date_key_of, reverse=(direction == "desc"))
     elif sort and sort in headers:
         rows = sorted(rows, key=lambda r: _sort_key(r.get(sort, "")),
                       reverse=(direction == "desc"))
@@ -642,7 +675,8 @@ def crm_page():
         boxes=boxes,
         suggestions=suggestions,
         wide_col=wide,
-        action_col=action_col,
+        date_col=date_col,
+        task_col=task_col,
         workbook=store.XLSX_FILE,
         backup=store.backup_info(),
         has_logo=logo_exists(),
@@ -1407,7 +1441,14 @@ STYLE = """
     }
     input.whenin {
       font-variant-numeric: tabular-nums; font-size: 13px;
-      padding: 7px 9px; min-width: 165px;
+      padding: 7px 9px; min-width: 150px; cursor: pointer;
+    }
+    input[type=date].whenin::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .55; }
+    input[type=date].whenin:hover::-webkit-calendar-picker-indicator { opacity: 1; }
+    td.taskcell { min-width: 210px; max-width: 300px; }
+    .rawnote {
+      font-size: 11px; color: var(--red); margin-top: 3px; padding-left: 2px;
+      word-break: break-word;
     }
 
     .boxempty { padding: 26px 18px; text-align:center; color: var(--ink-faint); font-size: 13px; }
@@ -1999,14 +2040,13 @@ CRM_PAGE = """
               <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
                 <span class="who">{{ a.who }}</span>
                 {% if a.org %}<span class="org">&middot; {{ a.org }}</span>{% endif %}
-                {% if a.status == 'overdue' %}
-                  <span class="pill pill-over">{{ a.days }}d late</span>
-                {% elif a.status == 'today' %}
+                {% if a.status == 'today' %}
                   <span class="pill pill-soon">today</span>
-                {% elif a.status == 'upcoming' %}
+                {% else %}
                   <span class="pill pill-cold">in {{ a.days }}d</span>
                 {% endif %}
               </div>
+              {% if a.task %}<div class="what">{{ a.task }}</div>{% endif %}
               <div class="when">&#128197; {{ a.shown }}</div>
             </div>
           {% endfor %}
@@ -2052,14 +2092,15 @@ CRM_PAGE = """
         <div class="boxempty">
           Nothing yet.<br>
           <span style="font-size:12px;">
-            Put a date and time in <b>{{ boxes.cols.action or 'column F' }}</b> on any row,
+            Pick a date in <b>{{ boxes.cols.date or 'column F' }}</b> on any row,
             or press <b>Analyse activity</b> to read the notes.
           </span>
         </div>
       {% endif %}
 
       <div class="boxnote" style="font-size:11px;">
-        Dates from <b>{{ boxes.cols.action or 'column F' }}</b> &middot; edit them in the table
+        Today and later only, newest first &middot;
+        <b>{{ boxes.cols.date or 'column F' }}</b> + <b>{{ boxes.cols.task or 'column G' }}</b>
       </div>
 
       <div class="boxnote">
@@ -2218,6 +2259,8 @@ CRM_PAGE = """
                 <td class="{% if wide_col and wide_col == key.lower() %}wide4{% endif %}">
                   {% if wide_col and wide_col == key.lower() %}
                     <textarea form="addform" name="col_{{ col_num }}" rows="3" placeholder="{{ label }}..."></textarea>
+                  {% elif date_col and col_num == date_col %}
+                    <input form="addform" class="whenin" type="date" name="col_{{ col_num }}">
                   {% elif col_num == sno_col %}
                     <input form="addform" type="text" name="col_{{ col_num }}"
                            value="{{ next_sno }}" placeholder="{{ label }}">
@@ -2253,15 +2296,30 @@ CRM_PAGE = """
                                 onblur="if(this.defaultValue!==this.value){this.form.submit();}">{{ value }}</textarea>
                     </form>
                   </td>
-                {% elif action_col and col_num == action_col %}
+                {% elif date_col and col_num == date_col %}
+                  {% set iso = value | iso_date %}
                   <td class="editable">
                     <form class="cellform" method="post" action="/crm/edit">
                       <input type="hidden" name="sheet" value="{{ sheet }}">
                       <input type="hidden" name="row" value="{{ row._row }}">
                       <input type="hidden" name="col" value="{{ col_num }}">
                       <input type="hidden" name="q" value="{{ q }}">
-                      <input class="cellin whenin" type="text" name="value" value="{{ value }}"
-                             placeholder="Nov 12, 2026 3:30 PM"
+                      <input class="cellin whenin" type="date" name="value" value="{{ iso }}"
+                             onchange="this.form.submit();">
+                    </form>
+                    {% if value and not iso %}
+                      <div class="rawnote" title="Could not read this as a date">{{ value }}</div>
+                    {% endif %}
+                  </td>
+                {% elif task_col and col_num == task_col %}
+                  <td class="editable taskcell">
+                    <form class="cellform" method="post" action="/crm/edit">
+                      <input type="hidden" name="sheet" value="{{ sheet }}">
+                      <input type="hidden" name="row" value="{{ row._row }}">
+                      <input type="hidden" name="col" value="{{ col_num }}">
+                      <input type="hidden" name="q" value="{{ q }}">
+                      <input class="cellin" type="text" name="value" value="{{ value }}"
+                             placeholder="Action item..."
                              onblur="if(this.defaultValue!==this.value){this.form.submit();}">
                     </form>
                   </td>
@@ -2286,8 +2344,8 @@ CRM_PAGE = """
 
     <p class="muted" style="font-size:12.5px; margin-top:14px;">
       <b>{{ workbook }}</b> &rarr; sheet <b>{{ sheet }}</b>.
-      The <b>{{ wide_col }}</b>{% if boxes.cols.action %} and
-      <b>{{ boxes.cols.action }}</b>{% endif %} columns save when you click away from them.
+      The <b>{{ wide_col }}</b>{% if boxes.cols.task %}, <b>{{ boxes.cols.task }}</b>{% endif %}
+      and <b>{{ boxes.cols.date or 'date' }}</b> columns save as soon as you leave them.
       Keep the file closed in Excel while using this page.
       {% if backup.exists %}
         <br>Backup last written <b>{{ backup.when }}</b>
