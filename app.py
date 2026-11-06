@@ -577,6 +577,11 @@ def crm_page():
     q = request.args.get("q", "").strip()
     adding = request.args.get("add", "") == "1"
 
+    try:                                   # how many cells the last Save wrote, if any
+        saved = int(request.args["saved"])
+    except (KeyError, ValueError):
+        saved = None
+
     headers, all_rows = store.read_sheet_auto(sheet)
     total = len(all_rows)
 
@@ -677,6 +682,7 @@ def crm_page():
         wide_col=wide,
         date_col=date_col,
         task_col=task_col,
+        saved=saved,
         workbook=store.XLSX_FILE,
         backup=store.backup_info(),
         has_logo=logo_exists(),
@@ -700,6 +706,53 @@ def crm_analyze():
         crm_state["log"] = []
         threading.Thread(target=crm_worker, args=(sheet,), daemon=True).start()
     return redirect(url_for("crm_page", sheet=sheet))
+
+
+@app.route("/crm/save", methods=["POST"])
+def crm_save():
+    """Write every edited cell on the sheet in one go. Unchanged cells are left alone."""
+    sheet = request.form.get("sheet", "")
+    saved = 0
+
+    if sheet:
+        headers, rows = store.read_sheet_auto(sheet)
+
+        # which column is the calendar one - its stored text and the picker's text differ in shape
+        date_key = headers[CRM_DATE_COL_NUM - 1] if len(headers) >= CRM_DATE_COL_NUM else ""
+        if CRM_DATE_COL:
+            date_key = find_col(headers, (), CRM_DATE_COL) or date_key
+        date_num = (headers.index(date_key) + 1) if date_key in headers else 0
+
+        current = {}
+        for row in rows:
+            for i, header in enumerate(headers):
+                current[(row.get("_row", 0), i + 1)] = (row.get(header, "") or "")
+
+        for field, posted in request.form.items():
+            if not field.startswith("cell_"):
+                continue
+            try:
+                _, row_text, col_text = field.split("_", 2)
+                excel_row, col = int(row_text), int(col_text)
+            except ValueError:
+                continue
+
+            new = (posted or "").strip()
+            old = (current.get((excel_row, col), "") or "").strip()
+            if col == date_num:
+                old = iso_date(old) or old          # compare like with like
+            if new == old:
+                continue
+
+            store.update_cell(sheet, excel_row, col, new)
+            saved += 1
+
+    return redirect(url_for("crm_page",
+                            sheet=sheet,
+                            q=request.form.get("q", "") or None,
+                            sort=request.form.get("sort", "") or None,
+                            dir=request.form.get("dir", "") or None,
+                            saved=saved))
 
 
 @app.route("/crm/edit", methods=["POST"])
@@ -1445,7 +1498,25 @@ STYLE = """
     }
     input[type=date].whenin::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .55; }
     input[type=date].whenin:hover::-webkit-calendar-picker-indicator { opacity: 1; }
-    td.taskcell { min-width: 210px; max-width: 300px; }
+    td.taskcell {
+      min-width: 240px; max-width: 330px;
+      white-space: normal; word-break: break-word; vertical-align: top;
+    }
+    td.taskcell textarea.cellin { overflow: hidden; min-height: 0; line-height: 1.45; }
+
+    /* save bar */
+    .savebar {
+      display:flex; align-items:center; gap: 12px; flex-wrap: wrap;
+      margin: 0 0 12px;
+    }
+    .savebar-bottom { margin: 14px 0 0; }
+    .savestate { font-size: 12.5px; color: var(--ink-faint); }
+    .savestate.dirty { color: var(--amber); font-weight: 600; }
+    .savedflash {
+      font-size: 12.5px; font-weight: 600; color: #15803d;
+      background: var(--green-soft); padding: 4px 11px; border-radius: 99px;
+    }
+    .cellin.touched { background: #fffdf3; border-color: var(--amber); }
     .rawnote {
       font-size: 11px; color: var(--red); margin-top: 3px; padding-left: 2px;
       word-break: break-word;
@@ -2239,6 +2310,26 @@ CRM_PAGE = """
   </div>
 
   {% if columns %}
+    <form id="crmsave" method="post" action="/crm/save">
+      <input type="hidden" name="sheet" value="{{ sheet }}">
+      <input type="hidden" name="q" value="{{ q }}">
+      <input type="hidden" name="sort" value="{{ sort }}">
+      <input type="hidden" name="dir" value="{{ direction }}">
+    </form>
+
+    <div class="savebar">
+      <button class="btn btn-primary" form="crmsave" type="submit" id="savebtn">
+        &#128190; Save sheet
+      </button>
+      <span class="savestate" id="savestate">No unsaved changes</span>
+      {% if saved is not none %}
+        <span class="savedflash">
+          {% if saved %}Saved {{ saved }} cell{% if saved != 1 %}s{% endif %} to {{ sheet }}
+          {% else %}Nothing had changed{% endif %}
+        </span>
+      {% endif %}
+    </div>
+
     <div class="tablewrap">
       <table>
         <thead>
@@ -2261,6 +2352,9 @@ CRM_PAGE = """
                     <textarea form="addform" name="col_{{ col_num }}" rows="3" placeholder="{{ label }}..."></textarea>
                   {% elif date_col and col_num == date_col %}
                     <input form="addform" class="whenin" type="date" name="col_{{ col_num }}">
+                  {% elif task_col and col_num == task_col %}
+                    <textarea form="addform" name="col_{{ col_num }}" rows="2"
+                              placeholder="{{ label }}..."></textarea>
                   {% elif col_num == sno_col %}
                     <input form="addform" type="text" name="col_{{ col_num }}"
                            value="{{ next_sno }}" placeholder="{{ label }}">
@@ -2284,44 +2378,29 @@ CRM_PAGE = """
                 {% set value = row.get(key, '') %}
                 {% if wide_col and wide_col == key.lower() %}
                   <td class="wide4">
-                    <form class="cellform" method="post" action="/crm/edit">
-                      <input type="hidden" name="sheet" value="{{ sheet }}">
-                      <input type="hidden" name="row" value="{{ row._row }}">
-                      <input type="hidden" name="col" value="{{ col_num }}">
-                      <input type="hidden" name="q" value="{{ q }}">
-                      <textarea class="cellin autogrow" name="value"
-                                rows="{{ value | rows_for }}"
-                                placeholder="Add activity..."
-                                oninput="autogrow(this)"
-                                onblur="if(this.defaultValue!==this.value){this.form.submit();}">{{ value }}</textarea>
-                    </form>
+                    <textarea class="cellin autogrow" form="crmsave"
+                              name="cell_{{ row._row }}_{{ col_num }}"
+                              rows="{{ value | rows_for }}"
+                              placeholder="Add activity..."
+                              oninput="autogrow(this); markDirty();">{{ value }}</textarea>
                   </td>
                 {% elif date_col and col_num == date_col %}
                   {% set iso = value | iso_date %}
                   <td class="editable">
-                    <form class="cellform" method="post" action="/crm/edit">
-                      <input type="hidden" name="sheet" value="{{ sheet }}">
-                      <input type="hidden" name="row" value="{{ row._row }}">
-                      <input type="hidden" name="col" value="{{ col_num }}">
-                      <input type="hidden" name="q" value="{{ q }}">
-                      <input class="cellin whenin" type="date" name="value" value="{{ iso }}"
-                             onchange="this.form.submit();">
-                    </form>
+                    <input class="cellin whenin" type="date" form="crmsave"
+                           name="cell_{{ row._row }}_{{ col_num }}" value="{{ iso }}"
+                           onchange="markDirty()">
                     {% if value and not iso %}
                       <div class="rawnote" title="Could not read this as a date">{{ value }}</div>
                     {% endif %}
                   </td>
                 {% elif task_col and col_num == task_col %}
                   <td class="editable taskcell">
-                    <form class="cellform" method="post" action="/crm/edit">
-                      <input type="hidden" name="sheet" value="{{ sheet }}">
-                      <input type="hidden" name="row" value="{{ row._row }}">
-                      <input type="hidden" name="col" value="{{ col_num }}">
-                      <input type="hidden" name="q" value="{{ q }}">
-                      <input class="cellin" type="text" name="value" value="{{ value }}"
-                             placeholder="Action item..."
-                             onblur="if(this.defaultValue!==this.value){this.form.submit();}">
-                    </form>
+                    <textarea class="cellin autogrow" form="crmsave"
+                              name="cell_{{ row._row }}_{{ col_num }}"
+                              rows="{{ value | rows_for(34, 2, 8) }}"
+                              placeholder="Action item..."
+                              oninput="autogrow(this); markDirty();">{{ value }}</textarea>
                   </td>
                 {% else %}
                   <td>
@@ -2342,10 +2421,15 @@ CRM_PAGE = """
       </table>
     </div>
 
+    <div class="savebar savebar-bottom">
+      <button class="btn btn-primary" form="crmsave" type="submit">&#128190; Save sheet</button>
+      <span class="savestate" id="savestate2">No unsaved changes</span>
+    </div>
+
     <p class="muted" style="font-size:12.5px; margin-top:14px;">
       <b>{{ workbook }}</b> &rarr; sheet <b>{{ sheet }}</b>.
-      The <b>{{ wide_col }}</b>{% if boxes.cols.task %}, <b>{{ boxes.cols.task }}</b>{% endif %}
-      and <b>{{ boxes.cols.date or 'date' }}</b> columns save as soon as you leave them.
+      Edit <b>{{ wide_col }}</b>{% if boxes.cols.task %}, <b>{{ boxes.cols.task }}</b>{% endif %}
+      and <b>{{ boxes.cols.date or 'date' }}</b>, then press <b>Save sheet</b> - nothing is written until you do.
       Keep the file closed in Excel while using this page.
       {% if backup.exists %}
         <br>Backup last written <b>{{ backup.when }}</b>
@@ -2373,8 +2457,37 @@ CRM_PAGE = """
       el.style.height = 'auto';
       el.style.height = (el.scrollHeight + 2) + 'px';
     }
+
+    var dirty = false;
+
+    function markDirty(el) {
+      dirty = true;
+      ['savestate', 'savestate2'].forEach(function (id) {
+        var s = document.getElementById(id);
+        if (s) { s.textContent = 'Unsaved changes'; s.classList.add('dirty'); }
+      });
+    }
+
     document.addEventListener('DOMContentLoaded', function () {
       document.querySelectorAll('textarea.autogrow').forEach(autogrow);
+
+      // highlight only the cells actually changed, so it is obvious what will be written
+      document.querySelectorAll('#crmsave, [form=crmsave]').forEach(function (el) {
+        if (!el.name) { return; }
+        el.addEventListener('input', function () {
+          el.classList.toggle('touched', el.value !== el.defaultValue);
+        });
+        el.addEventListener('change', function () {
+          el.classList.toggle('touched', el.value !== el.defaultValue);
+        });
+      });
+
+      var form = document.getElementById('crmsave');
+      if (form) { form.addEventListener('submit', function () { dirty = false; }); }
+
+      window.addEventListener('beforeunload', function (e) {
+        if (dirty) { e.preventDefault(); e.returnValue = ''; }
+      });
     });
   </script>
 
