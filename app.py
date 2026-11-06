@@ -1286,10 +1286,10 @@ STYLE = """
     .muted { color: var(--ink-faint); font-weight: 400; }
     .datecell { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--ink-soft); }
 
-    /* the wide column (Activity by default) - roughly 4x a normal cell */
-    th.wide4 { min-width: 620px; }
+    /* the wide column (Activity by default) - takes whatever width is left over */
+    th.wide4 { min-width: 170px; }
     td.wide4 {
-      min-width: 620px; max-width: 760px;
+      min-width: 170px; width: 40%;
       white-space: normal; word-break: break-word; line-height: 1.55;
       vertical-align: top;
     }
@@ -1494,14 +1494,24 @@ STYLE = """
     }
     input.whenin {
       font-variant-numeric: tabular-nums; font-size: 13px;
-      padding: 7px 9px; min-width: 150px; cursor: pointer;
+      padding: 7px 9px; min-width: 128px; cursor: pointer;
     }
     input[type=date].whenin::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .55; }
     input[type=date].whenin:hover::-webkit-calendar-picker-indicator { opacity: 1; }
+    /* action item: a fixed 30-character box, 3 lines tall */
     td.taskcell {
-      min-width: 240px; max-width: 330px;
-      white-space: normal; word-break: break-word; vertical-align: top;
+      width: 1%; min-width: calc(30ch + 42px);
+      white-space: nowrap; vertical-align: top;
     }
+    td.taskcell textarea.taskin {
+      width: 30ch; min-width: 30ch; max-width: 30ch;
+      resize: vertical; overflow: auto; white-space: pre-wrap; word-break: break-word;
+      font-size: 13px; line-height: 1.45; display: block;
+    }
+    /* keep ordinary CRM cells from hogging the width and pushing the table sideways */
+    .crmmain tbody td { max-width: 190px; word-break: break-word; }
+    .crmmain tbody td.taskcell, .crmmain tbody td.wide4 { max-width: none; }
+    .crmmain thead th { white-space: normal; }
     td.taskcell textarea.cellin { overflow: hidden; min-height: 0; line-height: 1.45; }
 
     /* save bar */
@@ -2353,8 +2363,8 @@ CRM_PAGE = """
                   {% elif date_col and col_num == date_col %}
                     <input form="addform" class="whenin" type="date" name="col_{{ col_num }}">
                   {% elif task_col and col_num == task_col %}
-                    <textarea form="addform" name="col_{{ col_num }}" rows="2"
-                              placeholder="{{ label }}..."></textarea>
+                    <textarea form="addform" class="taskin" name="col_{{ col_num }}"
+                              rows="3" cols="30" placeholder="{{ label }}..."></textarea>
                   {% elif col_num == sno_col %}
                     <input form="addform" type="text" name="col_{{ col_num }}"
                            value="{{ next_sno }}" placeholder="{{ label }}">
@@ -2396,11 +2406,11 @@ CRM_PAGE = """
                   </td>
                 {% elif task_col and col_num == task_col %}
                   <td class="editable taskcell">
-                    <textarea class="cellin autogrow" form="crmsave"
+                    <textarea class="cellin taskin" form="crmsave"
                               name="cell_{{ row._row }}_{{ col_num }}"
-                              rows="{{ value | rows_for(34, 2, 8) }}"
+                              rows="3" cols="30"
                               placeholder="Action item..."
-                              oninput="autogrow(this); markDirty();">{{ value }}</textarea>
+                              oninput="markDirty()">{{ value }}</textarea>
                   </td>
                 {% else %}
                   <td>
