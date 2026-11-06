@@ -43,6 +43,11 @@ CRM_DATE_COL_NUM = int(os.getenv("CRM_DATE_COL_NUM", "6"))       # column F: act
 CRM_DATE_COL = os.getenv("CRM_DATE_COL", "")                     # or match it by header name instead
 CRM_TASK_COL_NUM = int(os.getenv("CRM_TASK_COL_NUM", "7"))       # column G: the action item itself
 CRM_TASK_COL = os.getenv("CRM_TASK_COL", "")                     # or match it by header name instead
+CRM_PRIORITY_HEADER = os.getenv("CRM_PRIORITY_HEADER", "Priority")   # colour swatch column
+
+# click order of the priority swatch, and how urgent each colour is when sorting
+PRIORITY_COLOURS = ("blue", "red", "yellow", "green")
+PRIORITY_ORDER = {"red": 0, "yellow": 1, "green": 2, "blue": 3}
 LINKEDIN_TIME = os.getenv("LINKEDIN_TIME", "07:00")
 YOUTUBE_TIME = os.getenv("YOUTUBE_TIME", "07:15")           # daily stats refresh         # daily post, 24h clock
 
@@ -177,7 +182,23 @@ def iso_date(text):
     return when.strftime("%Y-%m-%d") if when else ""
 
 
+def priority_of(text):
+    """Cell text -> one of the four swatch colours. Anything unrecognised is blue."""
+    colour = (text or "").strip().lower()
+    return colour if colour in PRIORITY_COLOURS else PRIORITY_COLOURS[0]
+
+
+def find_priority_col(headers):
+    """Excel column number of the Priority column, or 0 when the sheet has none yet."""
+    wanted = CRM_PRIORITY_HEADER.strip().lower()
+    for i, header in enumerate(headers):
+        if (header or "").strip().lower() == wanted:
+            return i + 1
+    return 0
+
+
 app.jinja_env.filters["iso_date"] = iso_date
+app.jinja_env.filters["prio"] = priority_of
 
 
 def find_col(headers, hints, override="", exclude=()):
@@ -583,6 +604,15 @@ def crm_page():
         saved = None
 
     headers, all_rows = store.read_sheet_auto(sheet)
+
+    # the Priority column is created once, on the first visit to a sheet without one
+    prio_col = find_priority_col(headers)
+    if headers and not prio_col:
+        store.update_cell(sheet, 1, len(headers) + 1, CRM_PRIORITY_HEADER)
+        headers, all_rows = store.read_sheet_auto(sheet)
+        prio_col = find_priority_col(headers)
+    prio_key = headers[prio_col - 1] if prio_col else ""
+
     total = len(all_rows)
 
     boxes = crm_boxes(headers, all_rows)
@@ -603,7 +633,7 @@ def crm_page():
     task_col = (headers.index(task_key) + 1) if task_key in headers else 0
 
     shown_nums = [c[0] for c in columns]
-    for num in (date_col, task_col):
+    for num in (date_col, task_col, prio_col):
         if num and num not in shown_nums:
             for col in all_cols:
                 if col[0] == num:
@@ -617,6 +647,14 @@ def crm_page():
             shown_nums.append(col[0])
 
     columns.sort(key=lambda c: c[0])          # keep spreadsheet order
+
+    # Priority lives at the end of the sheet but is shown right after S.No.
+    if prio_col:
+        prio_tuple = next((c for c in columns if c[0] == prio_col), None)
+        if prio_tuple:
+            columns.remove(prio_tuple)
+            after_sno = 1 if columns and columns[0][0] == CRM_SNO_COL else 0
+            columns.insert(after_sno, prio_tuple)
 
     # next serial number for the add row
     sno_key = headers[CRM_SNO_COL - 1] if len(headers) >= CRM_SNO_COL else ""
@@ -648,6 +686,7 @@ def crm_page():
         ("Name", boxes["cols"]["name"]),
         ("Action", task_key),
         ("Date", date_key),
+        ("Priority", prio_key),
     ]
     sortable = [(label, col) for label, col in sortable if col]
 
@@ -663,6 +702,11 @@ def crm_page():
             return when or far
 
         rows = sorted(rows, key=date_key_of, reverse=(direction == "desc"))
+    elif sort and sort == prio_key:
+        # red first, then yellow, green, blue
+        rows = sorted(rows,
+                      key=lambda r: PRIORITY_ORDER[priority_of(r.get(sort, ""))],
+                      reverse=(direction == "desc"))
     elif sort and sort in headers:
         rows = sorted(rows, key=lambda r: _sort_key(r.get(sort, "")),
                       reverse=(direction == "desc"))
@@ -682,6 +726,7 @@ def crm_page():
         wide_col=wide,
         date_col=date_col,
         task_col=task_col,
+        prio_col=prio_col,
         saved=saved,
         workbook=store.XLSX_FILE,
         backup=store.backup_info(),
@@ -722,6 +767,7 @@ def crm_save():
         if CRM_DATE_COL:
             date_key = find_col(headers, (), CRM_DATE_COL) or date_key
         date_num = (headers.index(date_key) + 1) if date_key in headers else 0
+        prio_num = find_priority_col(headers)
 
         current = {}
         for row in rows:
@@ -741,6 +787,8 @@ def crm_save():
             old = (current.get((excel_row, col), "") or "").strip()
             if col == date_num:
                 old = iso_date(old) or old          # compare like with like
+            elif col == prio_num:
+                old = priority_of(old)
             if new == old:
                 continue
 
@@ -1498,6 +1546,19 @@ STYLE = """
     }
     input[type=date].whenin::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .55; }
     input[type=date].whenin:hover::-webkit-calendar-picker-indicator { opacity: 1; }
+    /* priority swatch */
+    td.priocell, th.priocell { width: 1%; white-space: nowrap; text-align: center; }
+    .prio {
+      width: 18px; height: 18px; padding: 0; border-radius: 5px;
+      border: 1px solid rgba(15, 47, 92, .22); cursor: pointer;
+      display: inline-block; vertical-align: middle; transition: transform .1s, box-shadow .1s;
+    }
+    .prio:hover { transform: scale(1.18); box-shadow: 0 1px 5px rgba(15,47,92,.25); }
+    .prio-blue   { background: #2563eb; }
+    .prio-red    { background: #dc2626; }
+    .prio-yellow { background: #eab308; }
+    .prio-green  { background: #16a34a; }
+
     /* action item: a fixed 30-character box, 3 lines tall */
     td.taskcell {
       width: 1%; min-width: calc(30ch + 42px);
@@ -2362,6 +2423,11 @@ CRM_PAGE = """
                     <textarea form="addform" name="col_{{ col_num }}" rows="3" placeholder="{{ label }}..."></textarea>
                   {% elif date_col and col_num == date_col %}
                     <input form="addform" class="whenin" type="date" name="col_{{ col_num }}">
+                  {% elif prio_col and col_num == prio_col %}
+                    <input type="hidden" form="addform" name="col_{{ col_num }}" value="blue">
+                    <button type="button" class="prio prio-blue"
+                            title="Priority: blue - click to change"
+                            onclick="cyclePriority(this)"></button>
                   {% elif task_col and col_num == task_col %}
                     <textarea form="addform" class="taskin" name="col_{{ col_num }}"
                               rows="3" cols="30" placeholder="{{ label }}..."></textarea>
@@ -2404,6 +2470,15 @@ CRM_PAGE = """
                       <div class="rawnote" title="Could not read this as a date">{{ value }}</div>
                     {% endif %}
                   </td>
+                {% elif prio_col and col_num == prio_col %}
+                  {% set colour = value | prio %}
+                  <td class="priocell">
+                    <input type="hidden" form="crmsave"
+                           name="cell_{{ row._row }}_{{ col_num }}" value="{{ colour }}">
+                    <button type="button" class="prio prio-{{ colour }}"
+                            title="Priority: {{ colour }} - click to change"
+                            onclick="cyclePriority(this)"></button>
+                  </td>
                 {% elif task_col and col_num == task_col %}
                   <td class="editable taskcell">
                     <textarea class="cellin taskin" form="crmsave"
@@ -2438,7 +2513,7 @@ CRM_PAGE = """
 
     <p class="muted" style="font-size:12.5px; margin-top:14px;">
       <b>{{ workbook }}</b> &rarr; sheet <b>{{ sheet }}</b>.
-      Edit <b>{{ wide_col }}</b>{% if boxes.cols.task %}, <b>{{ boxes.cols.task }}</b>{% endif %}
+      Edit <b>{{ wide_col }}</b>{% if prio_col %}, <b>Priority</b>{% endif %}{% if boxes.cols.task %}, <b>{{ boxes.cols.task }}</b>{% endif %}
       and <b>{{ boxes.cols.date or 'date' }}</b>, then press <b>Save sheet</b> - nothing is written until you do.
       Keep the file closed in Excel while using this page.
       {% if backup.exists %}
@@ -2469,6 +2544,18 @@ CRM_PAGE = """
     }
 
     var dirty = false;
+
+    var PRIORITY_COLOURS = ['blue', 'red', 'yellow', 'green'];
+
+    function cyclePriority(btn) {
+      var hidden = btn.parentNode.querySelector('input[type=hidden]');
+      var now = hidden ? hidden.value : 'blue';
+      var next = PRIORITY_COLOURS[(PRIORITY_COLOURS.indexOf(now) + 1) % PRIORITY_COLOURS.length];
+      if (hidden) { hidden.value = next; }
+      btn.className = 'prio prio-' + next;
+      btn.title = 'Priority: ' + next + ' - click to change';
+      markDirty();
+    }
 
     function markDirty(el) {
       dirty = true;
