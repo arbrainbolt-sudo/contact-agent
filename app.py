@@ -776,16 +776,14 @@ def crm_page():
             after_sno = 1 if columns and columns[0][0] == CRM_SNO_COL else 0
             columns.insert(after_sno, prio_tuple)
 
-    # phone / email / location sit next to the name, ahead of the big text boxes
+    # phone / email / location go last, after the big text boxes
     extras = [c for c in columns if c[0] in CRM_EXTRA_COLS]
-    if extras:
-        for col in extras:
-            columns.remove(col)
-        name_key = boxes["cols"]["name"]
-        name_num = (headers.index(name_key) + 1) if name_key in headers else 0
-        at = next((i for i, c in enumerate(columns) if c[0] == name_num), len(columns) - 1)
-        for offset, col in enumerate(extras):
-            columns.insert(at + 1 + offset, col)
+    for col in extras:
+        columns.remove(col)
+    columns.extend(extras)
+
+    name_key = boxes["cols"]["name"]
+    name_col = (headers.index(name_key) + 1) if name_key in headers else 0
 
     # next serial number for the add row
     sno_key = headers[CRM_SNO_COL - 1] if len(headers) >= CRM_SNO_COL else ""
@@ -859,6 +857,7 @@ def crm_page():
         task_col=task_col,
         prio_col=prio_col,
         prio_note=prio_note,
+        name_col=name_col,
         edit_cols=list(CRM_EXTRA_COLS),
         saved=saved,
         workbook=store.XLSX_FILE,
@@ -1730,6 +1729,15 @@ STYLE = """
     .crmmain tbody td { max-width: 140px; word-break: break-word; }
     .crmmain tbody td.taskcell, .crmmain tbody td.wide4,
     .crmmain tbody td.editcell { max-width: none; }
+    .crmmain tbody td.namecell { max-width: 15ch; }
+    td.namecell, th.namecell {
+      width: 15ch; min-width: 15ch; max-width: 15ch;
+      white-space: normal; word-break: break-word; vertical-align: top;
+    }
+    .clamp3 {
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+      overflow: hidden; line-height: 1.4; max-height: 4.2em;
+    }
     td.editcell { min-width: 175px; width: 1%; white-space: nowrap; }
     td.editcell input.cellin { width: 175px; font-size: 13px; }
     .crmmain thead th { white-space: normal; }
@@ -2584,7 +2592,7 @@ CRM_PAGE = """
         <thead>
           <tr>
             {% for col_num, key, label in columns %}
-              <th class="{% if wide_col and wide_col == key.lower() %}wide4{% endif %}">{{ label }}</th>
+              <th class="{% if wide_col and wide_col == key.lower() %}wide4{% elif name_col and col_num == name_col %}namecell{% endif %}">{{ label }}</th>
             {% endfor %}
           </tr>
         </thead>
@@ -2660,6 +2668,8 @@ CRM_PAGE = """
                             title="{{ colour | priolabel }} - {{ colour | priomeaning }} - click to change"
                             onclick="cyclePriority(this)"></button>
                   </td>
+                {% elif name_col and col_num == name_col %}
+                  <td class="namecell"><div class="clamp3" title="{{ value }}">{{ value }}</div></td>
                 {% elif col_num in edit_cols %}
                   <td class="editable editcell">
                     <input class="cellin" type="text" form="crmsave"
