@@ -39,6 +39,8 @@ CRM_MAX_COLS = int(os.getenv("CRM_MAX_COLS", "6"))          # hide columns 7 onw
 CRM_HIDE_COLS = {1}                    # column numbers never shown on the page
 CRM_SNO_COL = 2                        # which column holds the serial number
 CRM_COL_LABELS = {2: "S.No."}          # display-only header overrides
+CRM_ACTION_COL_NUM = int(os.getenv("CRM_ACTION_COL_NUM", "6"))   # column F: called action date and time
+CRM_ACTION_COL = os.getenv("CRM_ACTION_COL", "")                 # or match it by header name instead
 LINKEDIN_TIME = os.getenv("LINKEDIN_TIME", "07:00")
 YOUTUBE_TIME = os.getenv("YOUTUBE_TIME", "07:15")           # daily stats refresh         # daily post, 24h clock
 
@@ -124,6 +126,49 @@ def parse_any_date(text):
     return None
 
 
+# Cells that hold a date AND a clock time, e.g. "Nov 12, 2026 3:30 PM".
+DATETIME_FORMATS = (
+    "%Y-%m-%d %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %I:%M %p", "%Y-%m-%d %I:%M%p",
+    "%m/%d/%Y %H:%M", "%m/%d/%Y %I:%M %p", "%m/%d/%Y %I:%M%p",
+    "%m/%d/%y %H:%M", "%m/%d/%y %I:%M %p", "%m/%d/%y %I:%M%p",
+    "%d/%m/%Y %H:%M", "%Y/%m/%d %H:%M",
+    "%b %d, %Y %H:%M", "%b %d, %Y %I:%M %p", "%b %d, %Y %I:%M%p",
+    "%B %d, %Y %H:%M", "%B %d, %Y %I:%M %p", "%B %d, %Y %I:%M%p",
+    "%b %d %Y %I:%M %p", "%B %d %Y %I:%M %p",
+    "%d %b %Y %H:%M", "%d %b %Y %I:%M %p",
+    "%b %d %I:%M %p", "%b %d %H:%M",
+)
+
+
+def parse_when(text):
+    """Parse a 'date and time' cell. Returns (datetime or None, has_time)."""
+    t = " ".join((text or "").split()).replace(" at ", " ")
+    if not t:
+        return None, False
+
+    for fmt in DATETIME_FORMATS:
+        try:
+            when = datetime.strptime(t, fmt)
+        except ValueError:
+            continue
+        if when.year == 1900:                       # format carried no year
+            when = when.replace(year=datetime.now().year)
+        return when, True
+
+    when = parse_any_date(t)
+    if when:
+        return when, bool(when.hour or when.minute)
+    return None, False
+
+
+def pretty_when(when, has_time):
+    """'Nov 12, 2026 - 3:30 PM', without zero-padded day or hour."""
+    shown = when.strftime("%b %d, %Y")
+    if has_time:
+        shown += when.strftime(" - %I:%M %p")
+    return shown.replace(" 0", " ").replace("- 0", "- ")
+
+
 def find_col(headers, hints, override="", exclude=()):
     """Locate a column: exact override, then exact hint, then prefix, then contains."""
     pool = [h for h in headers if h not in exclude]
@@ -162,6 +207,11 @@ def crm_boxes(headers, rows):
     last_col = find_col(headers, LASTCONTACT_HINTS, os.getenv("CRM_LASTCONTACT_COL", ""))
     activity_col = find_col(headers, (CRM_WIDE_COL,), CRM_ACTIVITY_COL)
 
+    # "Called action date and time" - column F by position, or by header name.
+    action_col = headers[CRM_ACTION_COL_NUM - 1] if len(headers) >= CRM_ACTION_COL_NUM else ""
+    if CRM_ACTION_COL:
+        action_col = find_col(headers, (), CRM_ACTION_COL) or action_col
+
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     cutoff = today - timedelta(days=CRM_STALE_DAYS)
 
@@ -169,6 +219,38 @@ def crm_boxes(headers, rows):
         who = (row.get(name_col, "") if name_col else "").strip()
         org = (row.get(company_col, "") if company_col else "").strip()
         return (who or "(no name)"), org
+
+    # ---- box 1: scheduled calls read straight from the action date/time column
+    actions = []
+    for row in rows:
+        raw = (row.get(action_col, "") if action_col else "").strip()
+        if not raw:
+            continue
+
+        when, has_time = parse_when(raw)
+        day = when.replace(hour=0, minute=0, second=0, microsecond=0) if when else None
+
+        if day is None:
+            status, days = "undated", None
+        elif day < today:
+            status, days = "overdue", (today - day).days
+        elif day == today:
+            status, days = "today", 0
+        else:
+            status, days = "upcoming", (day - today).days
+
+        who, org = label(row)
+        actions.append({
+            "who": who, "org": org,
+            "raw": raw,
+            "when": when,
+            "shown": pretty_when(when, has_time) if when else raw,
+            "status": status,
+            "days": days,
+            "row": row.get("_row", 0),
+        })
+
+    actions.sort(key=lambda a: (a["when"] is None, a["when"] or today))
 
     # ---- box 1 fallback: calls and follow-ups from columns
     followups = []
@@ -225,13 +307,14 @@ def crm_boxes(headers, rows):
     stale.sort(key=lambda s: (s["last"] is None, s["last"] or today))
 
     return {
+        "actions": actions,
         "followups": followups,
         "stale": stale,
         "stale_days": CRM_STALE_DAYS,
         "cols": {
             "name": name_col, "company": company_col,
             "followup": followup_col, "due": due_col, "last": last_col,
-            "activity": activity_col,
+            "activity": activity_col, "action": action_col,
         },
     }
 
@@ -494,6 +577,16 @@ def crm_page():
 
     columns = all_cols[:CRM_MAX_COLS]
     wide = (boxes["cols"]["activity"] or CRM_WIDE_COL).strip().lower()
+
+    # excel column number of the "called action date and time" cell, so it can be edited
+    action_key = boxes["cols"]["action"]
+    action_col = (headers.index(action_key) + 1) if action_key in headers else 0
+    if action_col and action_col not in [c[0] for c in columns]:
+        for col in all_cols:
+            if col[0] == action_col:
+                columns.append(col)
+                break
+
     for col in all_cols[CRM_MAX_COLS:]:
         if wide and wide == col[1].strip().lower():
             columns.append(col)
@@ -549,6 +642,7 @@ def crm_page():
         boxes=boxes,
         suggestions=suggestions,
         wide_col=wide,
+        action_col=action_col,
         workbook=store.XLSX_FILE,
         backup=store.backup_info(),
         has_logo=logo_exists(),
@@ -1301,6 +1395,21 @@ STYLE = """
     .pill-low { background: var(--line-soft); color: var(--ink-faint); }
     .pill-stale { background:#f3e8ff; color:#7e22ce; }
 
+    /* scheduled calls read from the action date/time column */
+    .act .when { font-variant-numeric: tabular-nums; }
+    .act-overdue .when { color: var(--red); font-weight: 600; }
+    .act-today .when { color: var(--amber); font-weight: 600; }
+    .act-undated .when { color: var(--ink-faint); font-style: italic; }
+    .boxsub {
+      font-size: 10.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
+      color: var(--ink-faint); padding: 11px 0 2px; margin-top: 5px;
+      border-top: 1px solid var(--line-soft);
+    }
+    input.whenin {
+      font-variant-numeric: tabular-nums; font-size: 13px;
+      padding: 7px 9px; min-width: 165px;
+    }
+
     .boxempty { padding: 26px 18px; text-align:center; color: var(--ink-faint); font-size: 13px; }
     .boxnote { font-size: 11.5px; color: var(--ink-faint); padding: 10px 18px; border-top: 1px solid var(--line-soft); }
 
@@ -1879,11 +1988,33 @@ CRM_PAGE = """
       <div class="boxhead">
         <span class="icon">&#128222;</span>
         <h2>Suggested next actions</h2>
-        <span class="n">{{ suggestions|length }}</span>
+        <span class="n">{{ boxes.actions|length + suggestions|length }}</span>
       </div>
 
-      {% if suggestions %}
+      {% if boxes.actions or suggestions %}
         <div class="boxscroll">
+
+          {% for a in boxes.actions %}
+            <div class="boxitem act act-{{ a.status }}">
+              <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
+                <span class="who">{{ a.who }}</span>
+                {% if a.org %}<span class="org">&middot; {{ a.org }}</span>{% endif %}
+                {% if a.status == 'overdue' %}
+                  <span class="pill pill-over">{{ a.days }}d late</span>
+                {% elif a.status == 'today' %}
+                  <span class="pill pill-soon">today</span>
+                {% elif a.status == 'upcoming' %}
+                  <span class="pill pill-cold">in {{ a.days }}d</span>
+                {% endif %}
+              </div>
+              <div class="when">&#128197; {{ a.shown }}</div>
+            </div>
+          {% endfor %}
+
+          {% if boxes.actions and suggestions %}
+            <div class="boxsub">From activity analysis</div>
+          {% endif %}
+
           {% for s in suggestions %}
             <div class="sugg p-{{ s.priority }}">
               <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
@@ -1920,9 +2051,16 @@ CRM_PAGE = """
       {% else %}
         <div class="boxempty">
           Nothing yet.<br>
-          <span style="font-size:12px;">Press <b>Analyse activity</b> to read the notes and suggest next steps.</span>
+          <span style="font-size:12px;">
+            Put a date and time in <b>{{ boxes.cols.action or 'column F' }}</b> on any row,
+            or press <b>Analyse activity</b> to read the notes.
+          </span>
         </div>
       {% endif %}
+
+      <div class="boxnote" style="font-size:11px;">
+        Dates from <b>{{ boxes.cols.action or 'column F' }}</b> &middot; edit them in the table
+      </div>
 
       <div class="boxnote">
         <form method="post" action="/crm/analyze" style="display:flex; align-items:center; gap:10px;">
@@ -2115,6 +2253,18 @@ CRM_PAGE = """
                                 onblur="if(this.defaultValue!==this.value){this.form.submit();}">{{ value }}</textarea>
                     </form>
                   </td>
+                {% elif action_col and col_num == action_col %}
+                  <td class="editable">
+                    <form class="cellform" method="post" action="/crm/edit">
+                      <input type="hidden" name="sheet" value="{{ sheet }}">
+                      <input type="hidden" name="row" value="{{ row._row }}">
+                      <input type="hidden" name="col" value="{{ col_num }}">
+                      <input type="hidden" name="q" value="{{ q }}">
+                      <input class="cellin whenin" type="text" name="value" value="{{ value }}"
+                             placeholder="Nov 12, 2026 3:30 PM"
+                             onblur="if(this.defaultValue!==this.value){this.form.submit();}">
+                    </form>
+                  </td>
                 {% else %}
                   <td>
                     {% if value.startswith('http://') or value.startswith('https://') %}
@@ -2136,7 +2286,8 @@ CRM_PAGE = """
 
     <p class="muted" style="font-size:12.5px; margin-top:14px;">
       <b>{{ workbook }}</b> &rarr; sheet <b>{{ sheet }}</b>.
-      The <b>{{ wide_col }}</b> column saves when you click away from it.
+      The <b>{{ wide_col }}</b>{% if boxes.cols.action %} and
+      <b>{{ boxes.cols.action }}</b>{% endif %} columns save when you click away from them.
       Keep the file closed in Excel while using this page.
       {% if backup.exists %}
         <br>Backup last written <b>{{ backup.when }}</b>
