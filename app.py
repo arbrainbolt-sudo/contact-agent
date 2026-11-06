@@ -45,6 +45,9 @@ CRM_DATE_COL = os.getenv("CRM_DATE_COL", "")                     # or match it b
 CRM_TASK_COL_NUM = int(os.getenv("CRM_TASK_COL_NUM", "7"))       # column G: the action item itself
 CRM_TASK_COL = os.getenv("CRM_TASK_COL", "")                     # or match it by header name instead
 CRM_PRIORITY_HEADER = os.getenv("CRM_PRIORITY_HEADER", "Priority")   # colour swatch column
+# plain editable columns beyond the first few - J, K, L (phone, email, location)
+CRM_EXTRA_COLS = tuple(int(n) for n in
+                       os.getenv("CRM_EXTRA_COLS", "10,11,12").replace(" ", "").split(",") if n)
 CRM_PRIORITY_COL_NUM = int(os.getenv("CRM_PRIORITY_COL_NUM", "9"))   # column I
 
 # click order of the swatch, the word written to the sheet, and sort order
@@ -745,7 +748,7 @@ def crm_page():
     task_col = (headers.index(task_key) + 1) if task_key in headers else 0
 
     shown_nums = [c[0] for c in columns]
-    for num in (date_col, task_col, prio_col):
+    for num in (date_col, task_col, prio_col) + tuple(CRM_EXTRA_COLS):
         if num and num not in shown_nums:
             for col in all_cols:
                 if col[0] == num:
@@ -772,6 +775,17 @@ def crm_page():
             columns.remove(prio_tuple)
             after_sno = 1 if columns and columns[0][0] == CRM_SNO_COL else 0
             columns.insert(after_sno, prio_tuple)
+
+    # phone / email / location sit next to the name, ahead of the big text boxes
+    extras = [c for c in columns if c[0] in CRM_EXTRA_COLS]
+    if extras:
+        for col in extras:
+            columns.remove(col)
+        name_key = boxes["cols"]["name"]
+        name_num = (headers.index(name_key) + 1) if name_key in headers else 0
+        at = next((i for i, c in enumerate(columns) if c[0] == name_num), len(columns) - 1)
+        for offset, col in enumerate(extras):
+            columns.insert(at + 1 + offset, col)
 
     # next serial number for the add row
     sno_key = headers[CRM_SNO_COL - 1] if len(headers) >= CRM_SNO_COL else ""
@@ -845,6 +859,7 @@ def crm_page():
         task_col=task_col,
         prio_col=prio_col,
         prio_note=prio_note,
+        edit_cols=list(CRM_EXTRA_COLS),
         saved=saved,
         workbook=store.XLSX_FILE,
         backup=store.backup_info(),
@@ -1713,7 +1728,10 @@ STYLE = """
     }
     /* keep ordinary CRM cells from hogging the width and pushing the table sideways */
     .crmmain tbody td { max-width: 140px; word-break: break-word; }
-    .crmmain tbody td.taskcell, .crmmain tbody td.wide4 { max-width: none; }
+    .crmmain tbody td.taskcell, .crmmain tbody td.wide4,
+    .crmmain tbody td.editcell { max-width: none; }
+    td.editcell { min-width: 175px; width: 1%; white-space: nowrap; }
+    td.editcell input.cellin { width: 175px; font-size: 13px; }
     .crmmain thead th { white-space: normal; }
     td.taskcell textarea.cellin { overflow: hidden; min-height: 0; line-height: 1.45; }
 
@@ -2642,6 +2660,12 @@ CRM_PAGE = """
                             title="{{ colour | priolabel }} - {{ colour | priomeaning }} - click to change"
                             onclick="cyclePriority(this)"></button>
                   </td>
+                {% elif col_num in edit_cols %}
+                  <td class="editable editcell">
+                    <input class="cellin" type="text" form="crmsave"
+                           name="cell_{{ row._row }}_{{ col_num }}" value="{{ value }}"
+                           placeholder="{{ label }}..." oninput="markDirty()">
+                  </td>
                 {% elif task_col and col_num == task_col %}
                   <td class="editable taskcell">
                     <textarea class="cellin taskin" form="crmsave"
@@ -2676,8 +2700,7 @@ CRM_PAGE = """
 
     <p class="muted" style="font-size:12.5px; margin-top:14px;">
       <b>{{ workbook }}</b> &rarr; sheet <b>{{ sheet }}</b>.
-      Edit <b>{{ wide_col }}</b>{% if prio_col %}, <b>Priority</b>{% endif %}{% if boxes.cols.task %}, <b>{{ boxes.cols.task }}</b>{% endif %}
-      and <b>{{ boxes.cols.date or 'date' }}</b>, then press <b>Save sheet</b> - nothing is written until you do.
+      Every white box on this page is editable - press <b>Save sheet</b> and nothing is written until you do.
       Keep the file closed in Excel while using this page.
       {% if backup.exists %}
         <br>Backup last written <b>{{ backup.when }}</b>
