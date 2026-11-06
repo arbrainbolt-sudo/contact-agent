@@ -1577,6 +1577,15 @@ STYLE = """
       display: inline-block; vertical-align: middle; transition: transform .1s, box-shadow .1s;
     }
     .prio:hover { transform: scale(1.18); box-shadow: 0 1px 5px rgba(15,47,92,.25); }
+    .legend {
+      display: inline-flex; align-items: center; gap: 12px; flex-wrap: nowrap;
+      font-size: 12px; color: var(--ink-soft); white-space: nowrap;
+    }
+    .legend span { display: inline-flex; align-items: center; white-space: nowrap; }
+    .legend .dot {
+      width: 11px; height: 11px; border-radius: 3px; margin-right: 5px;
+      display: inline-block; border: 1px solid rgba(15, 47, 92, .22);
+    }
     .prio-blue   { background: #2563eb; }
     .prio-red    { background: #dc2626; }
     .prio-yellow { background: #eab308; }
@@ -2179,7 +2188,6 @@ CRM_PAGE = """
 <head>
   <meta charset="utf-8">
   <title>Hire2o - CRM</title>
-  {% if state.running %}<meta http-equiv="refresh" content="4">{% endif %}
 """ + STYLE + """
 </head>
 <body>
@@ -2334,7 +2342,9 @@ CRM_PAGE = """
   {% if state.running %}
     <div class="banner">
       <span class="pulse"></span>
-      <span>Reading activity notes and working out next steps - this page refreshes every 4 seconds.</span>
+      <span>Reading activity notes and working out next steps.</span>
+      <a class="btn btn-sm" style="margin-left:auto;"
+         href="/crm?sheet={{ sheet }}{% if q %}&q={{ q }}{% endif %}">&#8634; Check progress</a>
     </div>
   {% endif %}
 
@@ -2382,6 +2392,12 @@ CRM_PAGE = """
   <div class="sectionhead">
     <h2>{{ sheet }}</h2>
     <span class="counts">showing {{ rows|length }} of {{ total }} rows</span>
+    <span class="legend">
+      <span><i class="dot prio-red"></i>Hot</span>
+      <span><i class="dot prio-yellow"></i>Warm</span>
+      <span><i class="dot prio-green"></i>Room temp</span>
+      <span><i class="dot prio-blue"></i>Cold</span>
+    </span>
     {% if hidden_count %}
       <span class="hiddennote">{{ hidden_count }} column{% if hidden_count != 1 %}s{% endif %} hidden</span>
     {% endif %}
