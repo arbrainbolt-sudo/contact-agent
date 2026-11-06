@@ -50,6 +50,7 @@ CRM_PRIORITY_COL_NUM = int(os.getenv("CRM_PRIORITY_COL_NUM", "9"))   # column I
 # click order of the swatch, the word written to the sheet, and sort order
 PRIORITY_COLOURS = ("blue", "red", "yellow", "green")
 PRIORITY_LABELS = {"blue": "Blue", "red": "Red", "yellow": "Yellow", "green": "Green"}
+PRIORITY_MEANING = {"red": "Hot", "yellow": "Warm", "green": "Room Temp", "blue": "Cold"}
 PRIORITY_ORDER = {"red": 0, "yellow": 1, "green": 2, "blue": 3}
 
 # both the colour names and the older Hot/Warm wording read back correctly
@@ -299,6 +300,7 @@ def priority_column(headers):
 app.jinja_env.filters["iso_date"] = iso_date
 app.jinja_env.filters["prio"] = priority_of
 app.jinja_env.filters["priolabel"] = priority_label
+app.jinja_env.filters["priomeaning"] = lambda colour: PRIORITY_MEANING.get(colour, "Cold")
 
 
 def find_col(headers, hints, override="", exclude=()):
@@ -348,6 +350,9 @@ def crm_boxes(headers, rows):
     if CRM_TASK_COL:
         task_col = find_col(headers, (), CRM_TASK_COL) or task_col
 
+    prio_num = find_priority_col(headers)
+    prio_col = headers[prio_num - 1] if prio_num else ""
+
     today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     cutoff = today - timedelta(days=CRM_STALE_DAYS)
 
@@ -379,6 +384,7 @@ def crm_boxes(headers, rows):
             "when": day,
             "shown": pretty_when(day, False),
             "task": (row.get(task_col, "") if task_col else "").strip(),
+            "colour": priority_of(row.get(prio_col, "") if prio_col else ""),
             "status": "today" if day == today else "upcoming",
             "days": (day - today).days,
             "row": row.get("_row", 0),
@@ -1684,10 +1690,12 @@ STYLE = """
       font-size: 12px; color: var(--ink-soft); white-space: nowrap;
     }
     .legend span { display: inline-flex; align-items: center; white-space: nowrap; }
-    .legend .dot {
-      width: 11px; height: 11px; border-radius: 3px; margin-right: 5px;
-      display: inline-block; border: 1px solid rgba(15, 47, 92, .22);
+    .dot {
+      width: 11px; height: 11px; border-radius: 3px; flex: none;
+      display: inline-block; vertical-align: middle;
+      border: 1px solid rgba(15, 47, 92, .22);
     }
+    .legend .dot { margin-right: 5px; }
     .prio-blue   { background: #2563eb; }
     .prio-red    { background: #dc2626; }
     .prio-yellow { background: #eab308; }
@@ -2317,6 +2325,8 @@ CRM_PAGE = """
           {% for a in boxes.actions %}
             <div class="boxitem act act-{{ a.status }}">
               <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
+                <i class="dot prio-{{ a.colour }}"
+                   title="{{ a.colour | priolabel }} - {{ a.colour | priomeaning }}"></i>
                 <span class="who">{{ a.who }}</span>
                 {% if a.org %}<span class="org">&middot; {{ a.org }}</span>{% endif %}
                 {% if a.status == 'today' %}
@@ -2629,7 +2639,7 @@ CRM_PAGE = """
                            value="{{ colour | priolabel }}">
                     <button type="button" class="prio prio-{{ colour }}"
                             data-colour="{{ colour }}"
-                            title="{{ colour | priolabel }} - click to change"
+                            title="{{ colour | priolabel }} - {{ colour | priomeaning }} - click to change"
                             onclick="cyclePriority(this)"></button>
                   </td>
                 {% elif task_col and col_num == task_col %}
