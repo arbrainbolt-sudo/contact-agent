@@ -1,6 +1,7 @@
 """The web app. Run this, then open http://localhost:5000 in your browser."""
 
 import os
+import re
 import math
 import time
 import threading
@@ -8,7 +9,7 @@ import contextlib
 from datetime import datetime, date, timedelta
 from urllib.parse import urlparse
 
-from flask import Flask, request, redirect, url_for, render_template_string
+from flask import Flask, request, redirect, url_for, render_template_string, jsonify
 from events import bp as events_bp
 import contact_agent
 import crm
@@ -333,6 +334,178 @@ def _sort_key(value):
         return (0, float(v.replace(",", "").replace("$", "")), "")
     except ValueError:
         return (1, 0.0, v.lower())
+
+# ----------------------------------------------------------------------------
+# Relationship journey: turn one Activity cell into dated, classified touchpoints
+# ----------------------------------------------------------------------------
+
+MONTH_SHORT = {m: i for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun",
+     "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
+MONTH_LONG = {"january": 1, "february": 2, "march": 3, "april": 4, "may": 5, "june": 6,
+              "july": 7, "august": 8, "september": 9, "sept": 9, "october": 10,
+              "november": 11, "december": 12}
+
+J_NO_RESPONSE = ("no response", "no answer", "did not receive", "did not respond", "no reply",
+                 "not received", "no clue", "missed", "not much", "reminder", "unanswered",
+                 "never responded", "still no", "no update", "not reachable", "left message",
+                 "left a message", "voicemail", "bounced", "chased", "follow up again")
+J_IN_PERSON = ("in person", "met in", " met ", "lunch", "dinner", "coffee", "clubhouse",
+               "visited", "conference", "booth", "atl meeting")
+J_PROGRESS = ("demo", "onboard", "pricing", "quote", "proposal", "contract", "signed",
+              "responded", "feedback", "interested", "meeting set", "set up meeting",
+              "will share", "introduce", "resumes", "interviews", "agreed", "confirmed",
+              "shared", "sow", "trial", "poc", "referred", "referral")
+
+J_WHATSAPP = ("wa ", " wa", "wa-", "whatsapp", "w/a")
+J_CALL = ("call", "spoke", "zoom", "teams", "phone", "dial")
+J_MESSAGE = ("txt", "text", "sms", "email", "mail", "message", "msg", "linkedin", "dm ")
+
+J_DATE_PATTERNS = (
+    re.compile(r"^\s*([A-Za-z]{3,9})\.?\s+(\d{1,2})\s*(?:-\s*\d{1,2})?\b"),      # Jul 21, Sep 14-16
+    re.compile(r"^\s*(\d{1,2})\s*([A-Za-z]{3,9})\b"),                            # 3 jul
+    re.compile(r"^\s*([A-Za-z]{3,9})\.?\s+(?:first|second|third|last|early|mid|late)"
+               r"(?:\s+week)?(?:\s+of)?\b"),                                     # Nov first week
+)
+
+JOURNEY_LEVELS = ("No response", "Contact", "Progress", "In person")
+
+
+def _month_num(word):
+    w = (word or "").strip().lower().rstrip(".")
+    return MONTH_LONG.get(w) or MONTH_SHORT.get(w[:3])
+
+
+def _activity_lines(text):
+    text = (text or "").replace("_x000D_", "\n").replace("\r\n", "\n").replace("\r", "\n")
+    return [line.strip() for line in text.split("\n")]
+
+
+def classify_touchpoint(note):
+    """A note -> (engagement level, channel)."""
+    low = " " + note.lower() + " "
+    if any(k in low for k in J_NO_RESPONSE):
+        level = "No response"
+    elif any(k in low for k in J_IN_PERSON):
+        level = "In person"
+    elif any(k in low for k in J_PROGRESS):
+        level = "Progress"
+    else:
+        level = "Contact"
+
+    if any(k in low for k in J_IN_PERSON):
+        channel = "in person"
+    elif any(k in low for k in J_WHATSAPP):
+        channel = "WhatsApp"
+    elif any(k in low for k in J_CALL):
+        channel = "call"
+    elif any(k in low for k in J_MESSAGE):
+        channel = "message"
+    else:
+        channel = "message"
+    return level, channel
+
+
+def parse_activity(text, today=None):
+    """Activity cell -> touchpoints in date order, each with a level and a channel."""
+    today = today or datetime.now().date()
+    year, prev_month, points = None, None, []
+
+    for line in _activity_lines(text):
+        if not line:
+            continue
+
+        only_year = re.fullmatch(r"(20\d{2})\s*[/\\-]?\s*", line)
+        if only_year:
+            year = int(only_year.group(1))
+            continue
+        leading_year = re.match(r"^\s*(20\d{2})\s*[/\\]\s*(.+)$", line)
+        if leading_year:
+            year = int(leading_year.group(1))
+            line = leading_year.group(2).strip()
+
+        month = day = None
+        for i, pattern in enumerate(J_DATE_PATTERNS):
+            found = pattern.match(line)
+            if not found:
+                continue
+            if i == 0:
+                month, day = _month_num(found.group(1)), int(found.group(2))
+            elif i == 1:
+                month, day = _month_num(found.group(2)), int(found.group(1))
+            else:
+                month, day = _month_num(found.group(1)), 1
+            if month:
+                line = line[found.end():]
+                break
+            month = day = None
+
+        if not month:
+            continue
+
+        use_year = year or today.year
+        if prev_month and month < prev_month - 6:      # the list rolled into a new year
+            use_year += 1
+            year = use_year
+        prev_month = month
+
+        last = 29 if month == 2 else 30 if month in (4, 6, 9, 11) else 31
+        day = min(max(day, 1), last)
+        note = re.sub(r"^\s*[-:–]\s*", "", line).strip() or "(no note)"
+        level, channel = classify_touchpoint(note)
+
+        try:
+            when = datetime(use_year, month, day).date()
+        except ValueError:
+            continue
+        points.append({"date": when.isoformat(), "_d": when, "note": note,
+                       "level": level, "channel": channel, "future": when > today})
+
+    points.sort(key=lambda p: p["_d"])
+    for point in points:
+        if point["future"]:
+            point["level"] = "Next step"
+        point.pop("_d")
+    return points
+
+
+def journey_summary(points):
+    levels = [p["level"] for p in points]
+    days = None
+    if points:
+        first = datetime.fromisoformat(points[0]["date"])
+        for point in points:
+            if point["level"] in ("Progress", "In person"):
+                days = (datetime.fromisoformat(point["date"]) - first).days
+                break
+    return {"touchpoints": len(points),
+            "no_response": levels.count("No response"),
+            "days": days,
+            "progress": levels.count("Progress") + levels.count("In person")}
+
+
+def journey_months(points):
+    """Per-month counts for the bar chart, with no gaps in the run of months."""
+    if not points:
+        return []
+    first = datetime.fromisoformat(points[0]["date"])
+    last = datetime.fromisoformat(points[-1]["date"])
+    months, cursor = [], datetime(first.year, first.month, 1)
+    while cursor <= last:
+        months.append({"key": cursor.strftime("%Y-%m"),
+                       "label": cursor.strftime("%b"),
+                       "year": cursor.year,
+                       "counts": {}})
+        cursor = datetime(cursor.year + (cursor.month == 12),
+                          1 if cursor.month == 12 else cursor.month + 1, 1)
+    index = {m["key"]: m for m in months}
+    for point in points:
+        key = point["date"][:7]
+        if key in index:
+            counts = index[key]["counts"]
+            counts[point["level"]] = counts.get(point["level"], 0) + 1
+    return months
+
 
 def crm_boxes(headers, rows):
     """Build the two summary panels shown above the CRM table."""
@@ -883,6 +1056,40 @@ def crm_analyze():
         crm_state["log"] = []
         threading.Thread(target=crm_worker, args=(sheet,), daemon=True).start()
     return redirect(url_for("crm_page", sheet=sheet))
+
+
+@app.route("/crm/journey")
+def crm_journey():
+    """One person's activity notes, parsed into a journey the page can draw."""
+    sheet = request.args.get("sheet", "")
+    try:
+        excel_row = int(request.args.get("row", "0"))
+    except ValueError:
+        excel_row = 0
+    if not sheet or not excel_row:
+        return jsonify({"error": "need a sheet and a row"}), 400
+
+    headers, rows = store.read_sheet_auto(sheet)
+    row = next((r for r in rows if r.get("_row", 0) == excel_row), None)
+    if row is None:
+        return jsonify({"error": "that row is not on the sheet any more"}), 404
+
+    boxes = crm_boxes(headers, rows)
+    activity_key = boxes["cols"]["activity"] or CRM_WIDE_COL
+    name_key = boxes["cols"]["name"]
+    company_key = boxes["cols"]["company"]
+    prio_num = find_priority_col(headers)
+
+    points = parse_activity(row.get(activity_key, ""))
+    return jsonify({
+        "name": str(row.get(name_key, "") or "").strip() or "(no name)",
+        "company": str(row.get(company_key, "") or "").strip(),
+        "colour": priority_of(row.get(headers[prio_num - 1], "") if prio_num else ""),
+        "points": points,
+        "months": journey_months(points),
+        "summary": journey_summary(points),
+        "levels": list(JOURNEY_LEVELS),
+    })
 
 
 @app.route("/crm/save", methods=["POST"])
@@ -1734,6 +1941,66 @@ STYLE = """
       width: 15ch; min-width: 15ch; max-width: 15ch;
       white-space: normal; word-break: break-word; vertical-align: top;
     }
+    /* clickable name -> relationship journey */
+    .namelink {
+      background: none; border: 0; padding: 0; margin: 0; text-align: left;
+      font: inherit; color: var(--brand); font-weight: 600; cursor: pointer;
+      text-decoration: underline; text-decoration-color: rgba(15, 47, 92, .28);
+      text-underline-offset: 2px; width: 100%;
+    }
+    .namelink:hover { color: var(--accent); text-decoration-color: var(--accent); }
+
+    .jmodal {
+      display: none; position: fixed; inset: 0; z-index: 90;
+      background: rgba(15, 47, 92, .45); padding: 28px 18px; overflow: auto;
+    }
+    .jmodal.open { display: block; }
+    .jcard {
+      background: #fff; border-radius: 14px; max-width: 1040px; margin: 0 auto;
+      box-shadow: 0 18px 50px rgba(15, 47, 92, .3); overflow: hidden;
+    }
+    .jhead {
+      display: flex; align-items: flex-start; gap: 14px;
+      padding: 18px 22px; border-bottom: 1px solid var(--line-soft);
+    }
+    .jhead h2 { margin: 0; font-size: 18px; color: var(--brand); }
+    .jsub { font-size: 13px; color: var(--ink-faint); margin-top: 2px; }
+    .jclose {
+      margin-left: auto; background: none; border: 0; font-size: 26px; line-height: 1;
+      color: var(--ink-faint); cursor: pointer; padding: 0 4px;
+    }
+    .jclose:hover { color: var(--brand); }
+    .jbody { padding: 18px 22px 24px; position: relative; }
+
+    .jstats { display: flex; flex-wrap: wrap; gap: 26px; margin-bottom: 16px; }
+    .jstat span { display: block; font-size: 12px; color: var(--ink-faint); }
+    .jstat b { font-size: 26px; color: var(--brand); font-weight: 700; }
+
+    .jlegend {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+      font-size: 12px; color: var(--ink-soft); margin-bottom: 10px;
+    }
+    .jlegend span { display: inline-flex; align-items: center; }
+    .jlegend i { width: 11px; height: 11px; border-radius: 3px; margin-right: 6px; }
+    .jshapes { color: var(--ink-faint); }
+
+    .jsvg { width: 100%; height: auto; display: block; }
+    .jaxis { font-size: 12px; fill: #7a8699; font-family: inherit; }
+    .jh3 { font-size: 13px; color: var(--ink-soft); margin: 14px 0 2px; font-weight: 600; }
+    .jempty { color: var(--ink-faint); font-size: 13.5px; padding: 26px 2px; }
+    .jempty span { font-size: 12.5px; }
+
+    .jtip {
+      display: none; position: absolute; z-index: 5; max-width: 320px;
+      background: var(--brand); color: #fff; font-size: 12.5px; line-height: 1.45;
+      padding: 8px 11px; border-radius: 8px; pointer-events: none;
+      box-shadow: 0 6px 18px rgba(15, 47, 92, .3);
+    }
+    .jpill {
+      display: inline-block; margin-left: 7px; padding: 1px 7px; border-radius: 99px;
+      font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    }
+
     .clamp3 {
       display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
       overflow: hidden; line-height: 1.4; max-height: 4.2em;
@@ -2669,7 +2936,13 @@ CRM_PAGE = """
                             onclick="cyclePriority(this)"></button>
                   </td>
                 {% elif name_col and col_num == name_col %}
-                  <td class="namecell"><div class="clamp3" title="{{ value }}">{{ value }}</div></td>
+                  <td class="namecell">
+                    {% if value %}
+                      <button type="button" class="namelink clamp3"
+                              title="{{ value }} - click for the journey"
+                              onclick="openJourney({{ row._row }})">{{ value }}</button>
+                    {% endif %}
+                  </td>
                 {% elif col_num in edit_cols %}
                   <td class="editable editcell">
                     <input class="cellin" type="text" form="crmsave"
@@ -2733,6 +3006,19 @@ CRM_PAGE = """
     </div><!-- /crmmain -->
   </div><!-- /crmwrap -->
 
+  <div class="jmodal" id="jmodal" onclick="if(event.target===this){closeJourney();}">
+    <div class="jcard" role="dialog" aria-label="Relationship journey">
+      <div class="jhead">
+        <div>
+          <h2 id="jname">&nbsp;</h2>
+          <div class="jsub" id="jcompany"></div>
+        </div>
+        <button type="button" class="jclose" onclick="closeJourney()" aria-label="Close">&times;</button>
+      </div>
+      <div class="jbody" id="jbody"></div>
+    </div>
+  </div>
+
   <script>
     function autogrow(el) {
       el.style.height = 'auto';
@@ -2786,6 +3072,223 @@ CRM_PAGE = """
       window.addEventListener('beforeunload', function (e) {
         if (dirty) { e.preventDefault(); e.returnValue = ''; }
       });
+    });
+
+    // ---- relationship journey ------------------------------------------------
+    var J_COLOUR = {
+      'No response': '#8b9099', 'Contact': '#6c5ce7',
+      'Progress': '#16a34a', 'In person': '#0f2f5c', 'Next step': '#f59e0b'
+    };
+    var J_BANDS = ['In person', 'Progress', 'Contact', 'No response'];
+    var SVGNS = 'http://www.w3.org/2000/svg';
+
+    function el(tag, attrs, parent) {
+      var node = document.createElementNS(SVGNS, tag);
+      for (var k in attrs) { node.setAttribute(k, attrs[k]); }
+      if (parent) { parent.appendChild(node); }
+      return node;
+    }
+
+    function marker(parent, channel, x, y, colour, hollow) {
+      var fill = hollow ? '#ffffff' : colour;
+      var common = { fill: fill, stroke: colour, 'stroke-width': hollow ? 2.5 : 1 };
+      if (channel === 'WhatsApp') {
+        return el('circle', Object.assign({ cx: x, cy: y, r: 7 }, common), parent);
+      }
+      if (channel === 'call') {
+        return el('polygon', Object.assign({
+          points: [x, y - 8, x + 7.5, y + 6, x - 7.5, y + 6].join(' ') }, common), parent);
+      }
+      if (channel === 'in person') {
+        var pts = [];
+        for (var i = 0; i < 10; i++) {
+          var r = i % 2 ? 4 : 9.5, a = Math.PI / 5 * i - Math.PI / 2;
+          pts.push((x + r * Math.cos(a)).toFixed(1), (y + r * Math.sin(a)).toFixed(1));
+        }
+        return el('polygon', Object.assign({ points: pts.join(' ') }, common), parent);
+      }
+      return el('rect', Object.assign({ x: x - 6, y: y - 6, width: 12, height: 12, rx: 2.5 }, common), parent);
+    }
+
+    function tipOn(node, html, tip) {
+      node.style.cursor = 'pointer';
+      node.addEventListener('mousemove', function (e) {
+        tip.innerHTML = html;
+        tip.style.display = 'block';
+        var box = tip.parentNode.getBoundingClientRect();
+        var left = e.clientX - box.left + 14;
+        tip.style.left = Math.min(left, box.width - tip.offsetWidth - 10) + 'px';
+        tip.style.top = (e.clientY - box.top - tip.offsetHeight - 12) + 'px';
+      });
+      node.addEventListener('mouseleave', function () { tip.style.display = 'none'; });
+    }
+
+    function esc(s) {
+      return String(s).replace(/[&<>"]/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+      });
+    }
+
+    function niceDate(iso) {
+      var d = new Date(iso + 'T00:00:00');
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    }
+
+    function drawJourney(data, host) {
+      host.innerHTML = '';
+      var tip = document.createElement('div');
+      tip.className = 'jtip';
+      host.appendChild(tip);
+
+      var pts = data.points || [];
+      if (!pts.length) {
+        host.insertAdjacentHTML('beforeend',
+          '<p class="jempty">No dated entries in the Activity column for this row.' +
+          '<br><span>Lines need to start with a date, like <b>Sep 23 - called, will introduce me</b>.</span></p>');
+        return;
+      }
+
+      // ---- stat tiles
+      var s = data.summary;
+      var tiles = [['Touchpoints', s.touchpoints], ['No response', s.no_response],
+                   ['Days to breakthrough', s.days === null ? '--' : s.days],
+                   ['Progress moments', s.progress]];
+      host.insertAdjacentHTML('beforeend', '<div class="jstats">' + tiles.map(function (t) {
+        return '<div class="jstat"><span>' + t[0] + '</span><b>' + t[1] + '</b></div>';
+      }).join('') + '</div>');
+
+      // ---- legend
+      var swatches = J_BANDS.concat(['Next step']).map(function (k) {
+        return '<span><i style="background:' + J_COLOUR[k] + '"></i>' + k + '</span>';
+      }).join('');
+      host.insertAdjacentHTML('beforeend',
+        '<div class="jlegend">' + swatches +
+        '<span class="jshapes">Shapes: &#9679; WhatsApp &nbsp;&#9650; call &nbsp;&#9632; message &nbsp;&#9733; in person</span></div>');
+
+      // ---- step chart
+      var W = 920, H = 320, L = 110, R = 46, T = 18, B = 44;
+      var svg = el('svg', { viewBox: '0 0 ' + W + ' ' + H, class: 'jsvg' }, host);
+      var t0 = new Date(pts[0].date + 'T00:00:00').getTime();
+      var t1 = new Date(pts[pts.length - 1].date + 'T00:00:00').getTime();
+      if (t1 === t0) { t1 = t0 + 86400000 * 30; }
+      var pad = (t1 - t0) * 0.04;
+      function X(iso) {
+        var t = new Date(iso + 'T00:00:00').getTime();
+        return L + (t - (t0 - pad)) / ((t1 + pad) - (t0 - pad)) * (W - L - R);
+      }
+      var bandH = (H - T - B) / (J_BANDS.length - 1);
+      function Y(level) {
+        var band = level === 'Next step' ? 'Progress' : level;
+        var i = J_BANDS.indexOf(band);
+        return T + (i < 0 ? J_BANDS.length - 1 : i) * bandH;
+      }
+
+      J_BANDS.forEach(function (name) {
+        el('line', { x1: L, x2: W - R, y1: Y(name), y2: Y(name),
+                     stroke: '#e3e8ef', 'stroke-width': 1 }, svg);
+        var label = el('text', { x: L - 14, y: Y(name) + 4, 'text-anchor': 'end',
+                                 class: 'jaxis' }, svg);
+        label.textContent = name;
+      });
+
+      var d = 'M' + X(pts[0].date) + ' ' + Y(pts[0].level);
+      for (var i = 1; i < pts.length; i++) {
+        d += ' L' + X(pts[i].date) + ' ' + Y(pts[i - 1].level) +
+             ' L' + X(pts[i].date) + ' ' + Y(pts[i].level);
+      }
+      el('path', { d: d, fill: 'none', stroke: '#b9c2cf', 'stroke-width': 1.6 }, svg);
+
+      pts.forEach(function (p) {
+        var node = marker(svg, p.channel, X(p.date), Y(p.level), J_COLOUR[p.level] || '#6c5ce7',
+                          p.level === 'Next step');
+        tipOn(node, '<b>' + niceDate(p.date) + '</b><span class="jpill" style="background:' +
+                    (J_COLOUR[p.level] || '#6c5ce7') + '">' + p.level + '</span><br>' +
+                    esc(p.note), tip);
+      });
+
+      // month ticks
+      var seen = {};
+      (data.months || []).forEach(function (m) {
+        var iso = m.key + '-15';
+        if (seen[m.key]) { return; }
+        seen[m.key] = 1;
+        var tx = Math.max(L, Math.min(X(iso), W - 6));
+        var tick = el('text', { x: tx, y: H - 16, class: 'jaxis',
+                                'text-anchor': tx >= W - 6 ? 'end' : 'middle' }, svg);
+        tick.textContent = m.label;
+      });
+      el('line', { x1: L, x2: W - R, y1: H - B + 14, y2: H - B + 14,
+                   stroke: '#e3e8ef', 'stroke-width': 1 }, svg);
+
+      // ---- monthly bars
+      var months = data.months || [];
+      host.insertAdjacentHTML('beforeend', '<h3 class="jh3">Touchpoints per month</h3>');
+      var BH = 210, BB = 34, BT = 10;
+      var bars = el('svg', { viewBox: '0 0 ' + W + ' ' + BH, class: 'jsvg' }, host);
+      var top = 0;
+      months.forEach(function (m) {
+        var total = 0;
+        for (var k in m.counts) { total += m.counts[k]; }
+        top = Math.max(top, total);
+      });
+      top = Math.max(top, 1);
+      var plot = BH - BB - BT;
+      for (var g = 0; g <= top; g++) {
+        var gy = BT + plot - (g / top) * plot;
+        el('line', { x1: L, x2: W - R, y1: gy, y2: gy, stroke: '#eef1f6' }, bars);
+        var gl = el('text', { x: L - 14, y: gy + 4, 'text-anchor': 'end', class: 'jaxis' }, bars);
+        gl.textContent = g;
+      }
+      var slot = (W - L - R) / months.length;
+      var barW = Math.min(34, slot * 0.46);
+      months.forEach(function (m, mi) {
+        var cx = L + slot * (mi + 0.5);
+        var y = BT + plot;
+        ['No response', 'Contact', 'Progress', 'In person', 'Next step'].forEach(function (level) {
+          var n = m.counts[level] || 0;
+          if (!n) { return; }
+          var h = (n / top) * plot;
+          y -= h;
+          var rect = el('rect', { x: cx - barW / 2, y: y, width: barW, height: h,
+                                  fill: J_COLOUR[level], rx: 2 }, bars);
+          tipOn(rect, '<b>' + m.label + ' ' + m.year + '</b><br>' + n + ' x ' + level, tip);
+        });
+        var lab = el('text', { x: cx, y: BH - 12, 'text-anchor': 'middle', class: 'jaxis' }, bars);
+        lab.textContent = m.label;
+      });
+    }
+
+    function openJourney(row) {
+      var modal = document.getElementById('jmodal');
+      var body = document.getElementById('jbody');
+      document.getElementById('jname').textContent = 'Loading...';
+      document.getElementById('jcompany').textContent = '';
+      body.innerHTML = '<p class="jempty">Reading the activity notes...</p>';
+      modal.classList.add('open');
+
+      var sheet = document.querySelector('#crmsave input[name=sheet]');
+      fetch('/crm/journey?sheet=' + encodeURIComponent(sheet ? sheet.value : '') + '&row=' + row)
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          if (data.error) {
+            body.innerHTML = '<p class="jempty">' + esc(data.error) + '</p>';
+            return;
+          }
+          document.getElementById('jname').textContent = data.name;
+          document.getElementById('jcompany').textContent = data.company;
+          drawJourney(data, body);
+        })
+        .catch(function (err) {
+          body.innerHTML = '<p class="jempty">Could not load the journey: ' + esc(err) + '</p>';
+        });
+    }
+
+    function closeJourney() {
+      document.getElementById('jmodal').classList.remove('open');
+    }
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { closeJourney(); }
     });
   </script>
 
