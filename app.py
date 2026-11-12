@@ -847,6 +847,8 @@ def home():
         contacted_count=sum(1 for r in visible if r["contacted"] == "yes"),
         fields=contact_agent.DISPLAY_FIELDS,
         editable=contact_agent.EDITABLE_FIELDS,
+        backup=store.backup_info(),
+        workbook=store.XLSX_FILE,
         has_logo=logo_exists(),
         notify_status=notify.status_line(),
         tab="contacts",
@@ -1354,6 +1356,22 @@ def linkedin_push():
             log=li_log,
         )
     return redirect(url_for("linkedin_page"))
+
+
+@app.route("/contacts/backup", methods=["POST"])
+def contacts_backup():
+    store.backup_now()
+    return redirect(url_for("home",
+                            company=request.form.get("company", "") or None,
+                            q=request.form.get("q", "") or None))
+
+
+@app.route("/contacts/restore", methods=["POST"])
+def contacts_restore():
+    store.restore_backup()
+    return redirect(url_for("home",
+                            company=request.form.get("company", "") or None,
+                            q=request.form.get("q", "") or None))
 
 
 @app.route("/crm/backup", methods=["POST"])
@@ -2322,11 +2340,27 @@ CONTACTS_PAGE = """
           <label class="fieldlabel" for="q">Search all columns</label>
           <input type="text" id="q" name="q" value="{{ q }}" placeholder="name, note, email, date...">
         </div>
-        <div style="align-self:flex-end; display:flex; gap:8px; align-items:center;">
+        <div style="align-self:flex-end; display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
           <button class="btn" type="submit">Search</button>
           {% if company or q %}<a href="/" style="font-size:13px; color:var(--ink-soft);">Clear filters</a>{% endif %}
+          <button class="btn" type="submit" formaction="/contacts/backup" formmethod="post"
+                  title="Copy {{ workbook }} to results_backup.xlsx now">&#128190; Back up now</button>
+          {% if backup.exists %}
+            <button class="btn btn-danger" type="submit" formaction="/contacts/restore" formmethod="post"
+                    onclick="return confirm('Replace {{ workbook }} with the backup from {{ backup.when }}?\\n\\nAnything saved since then will be lost.');">
+              &#8634; Restore
+            </button>
+          {% endif %}
         </div>
       </div>
+      <p class="muted" style="font-size:12.5px; margin:12px 0 0;">
+        {% if backup.exists %}
+          Backup last written <b>{{ backup.when }}</b>
+          ({{ (backup.size / 1024) | round(1) }} KB) &middot; one is also taken automatically before every save.
+        {% else %}
+          No backup yet - press <b>Back up now</b> to make one.
+        {% endif %}
+      </p>
     </form>
   </div>
 
