@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 from flask import Flask, request, redirect, url_for, render_template_string, jsonify
 from events import bp as events_bp
+from expenses import bp as expenses_bp
 import contact_agent
 import crm
 import linkedin
@@ -22,6 +23,7 @@ import youtube
 
 app = Flask(__name__)
 app.register_blueprint(events_bp)
+app.register_blueprint(expenses_bp)
 
 state = {"running": False, "target": "", "country": "", "log": []}
 news_state = {"running": False, "log": [], "last_run": "", "last_run_ts": 0.0}
@@ -1916,6 +1918,39 @@ STYLE = """
     }
     input[type=date].whenin::-webkit-calendar-picker-indicator { cursor: pointer; opacity: .55; }
     input[type=date].whenin:hover::-webkit-calendar-picker-indicator { opacity: 1; }
+    /* expenses */
+    .exprow { display: flex; flex-wrap: wrap; gap: 14px; align-items: flex-end; }
+    .expfield { flex: 0 1 165px; min-width: 130px; }
+    .expfield.wide { flex: 1 1 220px; }
+    .expfield.narrow { flex: 0 1 120px; min-width: 100px; }
+    .expfield input[type=text], .expfield input[type=date], .expfield select { width: 100%; }
+    .expfield input[type=file] { font-size: 12.5px; width: 100%; }
+    .checkline {
+      display: inline-flex; align-items: center; gap: 7px;
+      font-size: 13px; color: var(--ink-soft); white-space: nowrap; padding-bottom: 9px;
+    }
+    .chip-soft { background: var(--canvas); color: var(--ink-soft); font-weight: 500; }
+    td.money, th.money { text-align: right; font-variant-numeric: tabular-nums; }
+    input.amountin { width: 88px; text-align: right; font-variant-numeric: tabular-nums; }
+    td.editcell select.cellin { width: 118px; }
+    tr.grouptotal td {
+      background: var(--canvas); font-weight: 600; color: var(--brand); font-size: 12.5px;
+    }
+    td.receiptcell { text-align: center; width: 1%; white-space: nowrap; }
+    .receiptthumb {
+      width: 40px; height: 40px; object-fit: cover; border-radius: 6px;
+      border: 1px solid var(--line); display: block;
+    }
+    .receipticon { font-size: 22px; }
+    .receiptform { margin: 0; }
+    .receiptadd {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 34px; height: 34px; border: 1px dashed var(--line); border-radius: 8px;
+      cursor: pointer; font-size: 17px; color: var(--ink-faint);
+    }
+    .receiptadd:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+    .receiptadd input[type=file] { display: none; }
+
     /* priority swatch */
     td.priocell, th.priocell { width: 1%; white-space: nowrap; text-align: center; }
     .prio {
@@ -2255,6 +2290,7 @@ HEADER = """
         <a href="/youtube" class="{% if tab == 'youtube' %}on{% endif %}">YouTube</a>
         <a href="/x" class="{% if tab == 'x' %}on{% endif %}">X</a>
         <a href="/events" class="{% if tab == 'events' %}on{% endif %}">Events</a>
+        <a href="/expenses" class="{% if tab == 'expenses' %}on{% endif %}">Expenses</a>
       </nav>
 
       <div class="spacer"></div>
