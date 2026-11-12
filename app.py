@@ -1950,6 +1950,42 @@ STYLE = """
     }
     .receiptadd:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
     .receiptadd input[type=file] { display: none; }
+    .milehint { font-size: 11px; color: var(--ink-faint); margin-top: 4px; }
+    .receiptname { font-size: 12.5px; color: var(--ink-faint); }
+    .receiptname.has { color: var(--accent); font-weight: 600; }
+
+    /* paste-a-receipt dialog */
+    .pastewrap {
+      display: none; position: fixed; inset: 0; z-index: 95;
+      background: rgba(15, 47, 92, .45); padding: 60px 18px; overflow: auto;
+    }
+    .pastewrap.open { display: block; }
+    .pastecard {
+      background: #fff; border-radius: 14px; max-width: 520px; margin: 0 auto;
+      box-shadow: 0 18px 50px rgba(15, 47, 92, .3); overflow: hidden;
+    }
+    .pastehead {
+      display: flex; align-items: center; padding: 14px 18px;
+      border-bottom: 1px solid var(--line-soft); color: var(--brand);
+    }
+    .pastehead .jclose { margin-left: auto; }
+    .pastezone {
+      margin: 18px; padding: 26px 18px; text-align: center; border-radius: 12px;
+      border: 2px dashed var(--line); color: var(--ink-soft); outline: none;
+    }
+    .pastezone:focus { border-color: var(--accent); background: var(--accent-soft); }
+    .pastezone p { margin: 6px 0; font-size: 13.5px; }
+    .pasteicon { font-size: 30px; }
+    .pastealt { font-size: 12.5px; color: var(--ink-faint); }
+    .linkish {
+      background: none; border: 0; padding: 0; font: inherit; cursor: pointer;
+      color: var(--accent); text-decoration: underline;
+    }
+    .pastestate { padding: 0 18px; font-size: 12.5px; color: var(--ink-soft); min-height: 18px; }
+    .pastepreview {
+      display: none; max-width: 100%; max-height: 240px; margin: 12px 18px 18px;
+      border-radius: 8px; border: 1px solid var(--line);
+    }
 
     /* priority swatch */
     td.priocell, th.priocell { width: 1%; white-space: nowrap; text-align: center; }

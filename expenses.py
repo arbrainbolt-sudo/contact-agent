@@ -22,7 +22,9 @@ bp = Blueprint("expenses", __name__)
 
 
 EXPENSE_SHEET = os.getenv("EXPENSE_SHEET", "Expenses")
-EXPENSE_TYPES = ("Food", "Gas", "EZPass", "Gift", "Office supply")
+MILE_RATE = float(os.getenv("MILE_RATE", "0.725"))          # dollars per mile
+MILES_TYPE = f"Miles @ {MILE_RATE * 100:.1f}"               # shown as "Miles @ 72.5"
+EXPENSE_TYPES = ("Food", "Gas", "EZPass", "Gift", "Office supply", MILES_TYPE)
 EXPENSE_HEADERS = ("Expense ID", "Group ID", "Date", "Client", "Amount",
                    "Type", "Paid by", "Location", "Receipt", "Added")
 RECEIPT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "receipts")
@@ -189,9 +191,15 @@ _PAGE_BODY = """
         </div>
         <div class="expfield">
           <label class="fieldlabel" for="type">Type</label>
-          <select id="type" name="type">
+          <select id="type" name="type" onchange="milesToggle()">
             {% for t in types %}<option value="{{ t }}">{{ t }}</option>{% endfor %}
           </select>
+        </div>
+        <div class="expfield narrow" id="milesbox" style="display:none;">
+          <label class="fieldlabel" for="miles">Miles driven</label>
+          <input type="text" inputmode="decimal" id="miles" name="miles"
+                 placeholder="0" oninput="milesToAmount()">
+          <div class="milehint" id="milehint">&times; {{ '%.3f' | format(mile_rate) }} per mile</div>
         </div>
         <div class="expfield">
           <label class="fieldlabel" for="paid_by">Paid by</label>
@@ -223,8 +231,13 @@ _PAGE_BODY = """
           </button>
         </div>
         <div class="expfield wide">
-          <label class="fieldlabel" for="receipt">&#128206; Receipt image</label>
-          <input type="file" id="receipt" name="receipt" accept="image/*,.pdf" capture="environment">
+          <label class="fieldlabel">&#128206; Receipt image</label>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <button class="btn" type="button" onclick="openPaste(0)">Attach / paste</button>
+            <span class="receiptname" id="receiptname">nothing attached</span>
+          </div>
+          <input type="file" id="receipt" name="receipt" accept="image/*,.pdf"
+                 capture="environment" style="display:none;" onchange="showPicked()">
         </div>
         <div class="expfield">
           <label class="fieldlabel">&nbsp;</label>
@@ -363,15 +376,9 @@ _PAGE_BODY = """
                       {% endif %}
                     </a>
                   {% else %}
-                    <form method="post" action="/expenses/receipt/{{ row._row }}"
-                          enctype="multipart/form-data" class="receiptform">
-                      <input type="hidden" name="group" value="{{ group }}">
-                      <label class="receiptadd" title="Attach a receipt">
-                        &#128206;
-                        <input type="file" name="receipt" accept="image/*,.pdf"
-                               capture="environment" onchange="this.form.submit()">
-                      </label>
-                    </form>
+                    <button type="button" class="receiptadd"
+                            title="Attach a receipt - choose a file or paste a screenshot"
+                            onclick="openPaste({{ row._row }})">&#128206;</button>
                   {% endif %}
                 </td>
                 <td>
@@ -407,7 +414,133 @@ _PAGE_BODY = """
     </div>
   {% endif %}
 
+  <div class="pastewrap" id="pastewrap" onclick="if(event.target===this){closePaste();}">
+    <div class="pastecard">
+      <div class="pastehead">
+        <b>Attach a receipt</b>
+        <button type="button" class="jclose" onclick="closePaste()" aria-label="Close">&times;</button>
+      </div>
+      <div class="pastezone" id="pastezone" tabindex="0">
+        <div class="pasteicon">&#128203;</div>
+        <p><b>Paste the image here</b> - press Ctrl+V (Cmd+V on a Mac)</p>
+        <p class="pastealt">or drop a file here, or
+          <button type="button" class="linkish" onclick="document.getElementById('pastefile').click()">
+            choose a file</button>
+        </p>
+        <input type="file" id="pastefile" accept="image/*,.pdf" style="display:none;"
+               onchange="takeFile(this.files[0])">
+      </div>
+      <div class="pastestate" id="pastestate"></div>
+      <img class="pastepreview" id="pastepreview" alt="">
+    </div>
+  </div>
+
   <script>
+    var MILE_RATE = {{ mile_rate }};
+    var MILES_TYPE = {{ miles_type | tojson }};
+
+    function milesToggle() {
+      var isMiles = document.getElementById('type').value === MILES_TYPE;
+      document.getElementById('milesbox').style.display = isMiles ? '' : 'none';
+      if (isMiles) { milesToAmount(); }
+    }
+
+    function milesToAmount() {
+      var miles = parseFloat(document.getElementById('miles').value || '0');
+      var hint = document.getElementById('milehint');
+      if (isNaN(miles) || miles <= 0) {
+        hint.textContent = 'x ' + MILE_RATE.toFixed(3) + ' per mile';
+        return;
+      }
+      var dollars = miles * MILE_RATE;
+      document.getElementById('amount').value = dollars.toFixed(2);
+      hint.textContent = miles + ' x ' + MILE_RATE.toFixed(3) + ' = $' + dollars.toFixed(2);
+    }
+
+    // ---- attach / paste a receipt -------------------------------------------
+    var pasteTarget = 0;          // 0 = the add form, otherwise an excel row
+
+    function openPaste(row) {
+      pasteTarget = row;
+      document.getElementById('pastestate').textContent = '';
+      document.getElementById('pastepreview').style.display = 'none';
+      document.getElementById('pastewrap').classList.add('open');
+      setTimeout(function () { document.getElementById('pastezone').focus(); }, 30);
+    }
+
+    function closePaste() {
+      document.getElementById('pastewrap').classList.remove('open');
+    }
+
+    function takeFile(file) {
+      if (!file) { return; }
+      var state = document.getElementById('pastestate');
+
+      if (file.type.indexOf('image/') === 0) {
+        var preview = document.getElementById('pastepreview');
+        preview.src = URL.createObjectURL(file);
+        preview.style.display = 'block';
+      }
+
+      if (pasteTarget === 0) {
+        // hand it to the add form, so it goes up with the new expense
+        var box = new DataTransfer();
+        box.items.add(file);
+        document.getElementById('receipt').files = box.files;
+        showPicked();
+        state.textContent = 'Attached - press "+ Add expense" to save it.';
+        setTimeout(closePaste, 900);
+        return;
+      }
+
+      state.textContent = 'Uploading...';
+      var body = new FormData();
+      body.append('receipt', file, file.name || 'pasted.png');
+      fetch('/expenses/receipt/' + pasteTarget, { method: 'POST', body: body })
+        .then(function () { window.location.reload(); })
+        .catch(function (err) { state.textContent = 'Upload failed: ' + err; });
+    }
+
+    function fileFromEvent(e) {
+      var data = e.clipboardData || e.dataTransfer;
+      if (!data) { return null; }
+      if (data.files && data.files.length) { return data.files[0]; }
+      var items = data.items || [];
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].kind === 'file') { return items[i].getAsFile(); }
+      }
+      return null;
+    }
+
+    function showPicked() {
+      var input = document.getElementById('receipt');
+      var label = document.getElementById('receiptname');
+      if (!label) { return; }
+      label.textContent = input.files && input.files.length
+        ? input.files[0].name : 'nothing attached';
+      label.classList.toggle('has', !!(input.files && input.files.length));
+    }
+
+    document.addEventListener('paste', function (e) {
+      if (!document.getElementById('pastewrap').classList.contains('open')) { return; }
+      var file = fileFromEvent(e);
+      if (file) { e.preventDefault(); takeFile(file); }
+      else { document.getElementById('pastestate').textContent =
+               'That paste held no image - copy the picture itself, not a link.'; }
+    });
+
+    ['dragover', 'drop'].forEach(function (name) {
+      document.getElementById('pastezone') &&
+      document.getElementById('pastezone').addEventListener(name, function (e) {
+        e.preventDefault();
+        if (name === 'drop') { takeFile(fileFromEvent(e)); }
+      });
+    });
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { closePaste(); }
+    });
+
     var dirty = false;
     function markDirty() {
       dirty = true;
@@ -415,6 +548,8 @@ _PAGE_BODY = """
       if (s) { s.textContent = 'Unsaved changes'; s.classList.add('dirty'); }
     }
     document.addEventListener('DOMContentLoaded', function () {
+      milesToggle();
+      showPicked();
       document.querySelectorAll('[form=expsave]').forEach(function (el) {
         var mark = function () { el.classList.toggle('touched', el.value !== el.defaultValue); };
         el.addEventListener('input', mark);
@@ -485,6 +620,8 @@ def expenses_page():
         spend=sum(r["_amount"] for r in shown),
         by_type=sorted(by_type.items(), key=lambda kv: -kv[1]),
         types=EXPENSE_TYPES,
+        mile_rate=MILE_RATE,
+        miles_type=MILES_TYPE,
         group_ids=sorted({r["Group ID"] for r in rows if r["Group ID"]}, reverse=True),
         clients=sorted({r["Client"] for r in rows if r["Client"]}),
         payers=sorted({r["Paid by"] for r in rows if r["Paid by"]}),
