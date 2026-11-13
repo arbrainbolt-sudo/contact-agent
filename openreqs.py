@@ -596,10 +596,10 @@ _PAGE_BODY = """
   {% endif %}
 
   <div class="jmodal" id="amodal" onclick="if(event.target===this){closeAnalytics();}">
-    <div class="jcard" role="dialog" aria-label="Submissions by client">
+    <div class="jcard" role="dialog" aria-label="Open reqs analytics">
       <div class="jhead">
         <div>
-          <h2>Submissions by requirement</h2>
+          <h2>Open reqs analytics</h2>
           <div class="jsub" id="asub"></div>
         </div>
         <button type="button" class="jclose" onclick="closeAnalytics()" aria-label="Close">&times;</button>
@@ -654,6 +654,12 @@ _PAGE_BODY = """
 
 
     // ---- analytics -----------------------------------------------------------
+    var STAGE_COLOUR = {
+      'Submitted': '#6c5ce7', 'Screening': '#00a8a8', 'Interview': '#f59e0b',
+      'Offer': '#16a34a', 'Placed': '#0f2f5c', 'Rejected': '#c4cbd6', 'Other': '#8b9099'
+    };
+    var PRIO_COLOUR = { blue: '#2563eb', red: '#dc2626', yellow: '#eab308', green: '#16a34a' };
+
     function aEsc(s) {
       return String(s).replace(/[&<>"]/g, function (c) {
         return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
@@ -679,66 +685,156 @@ _PAGE_BODY = """
       document.getElementById('amodal').classList.remove('open');
     }
 
+    function bar(label, value, most, colour, right, title) {
+      var pct = most ? (value / most) * 100 : 0;
+      return '<div class="abar"' + (title ? ' title="' + aEsc(title) + '"' : '') + '>' +
+        '<span class="alabel">' + aEsc(label) + '</span>' +
+        '<span class="atrack"><i class="afill" style="width:' + pct +
+          '%;background:' + colour + '"></i></span>' +
+        '<span class="acount">' + right + '</span></div>';
+    }
+
+    function card(title, note, inner) {
+      return '<section class="acard"><h3>' + aEsc(title) +
+             (note ? '<span>' + aEsc(note) + '</span>' : '') + '</h3>' + inner + '</section>';
+    }
+
     function drawAnalytics(data, host) {
       var t = data.totals;
       document.getElementById('asub').textContent =
-        t.reqs + ' reqs across ' + t.clients + ' client' + (t.clients === 1 ? '' : 's') +
+        t.reqs + ' reqs, ' + t.clients + ' client' + (t.clients === 1 ? '' : 's') +
         (window.location.search ? ' - matching the current filter' : '');
 
-      if (!t.reqs) {
-        host.innerHTML = '<p class="jempty">No reqs to chart.</p>';
-        return;
-      }
+      if (!t.reqs) { host.innerHTML = '<p class="jempty">No reqs to chart.</p>'; return; }
 
       var html = '<div class="jstats">' +
-        '<div class="jstat"><span>Submitted</span><b>' + t.submitted + '</b></div>' +
         '<div class="jstat"><span>Openings</span><b>' + t.openings + '</b></div>' +
+        '<div class="jstat"><span>Live candidates</span><b>' + t.submitted + '</b></div>' +
         '<div class="jstat"><span>Per opening</span><b>' +
-          (t.openings ? (t.submitted / t.openings).toFixed(1) : '--') + '</b></div>' +
-        '<div class="jstat"><span>Reqs with none</span><b>' +
-          data.clients.reduce(function (n, c) {
-            return n + c.reqs.filter(function (r) { return !r.submitted; }).length; }, 0) +
-        '</b></div></div>';
+           (t.openings ? (t.submitted / t.openings).toFixed(1) : '--') + '</b></div>' +
+        '<div class="jstat"><span>Reqs with nobody</span><b class="' +
+           (t.uncovered ? 'warn' : '') + '">' + t.uncovered + '</b></div>' +
+        '<div class="jstat"><span>Oldest req</span><b>' + t.oldest + 'd</b></div>' +
+        '</div><div class="agrid">';
 
-      // the widest bar sets the scale: submitted, or the opening count if larger
+      // 1. coverage by client
       var most = 1;
+      data.clients.forEach(function (c) { most = Math.max(most, c.openings, c.submitted); });
+      var inner = '';
       data.clients.forEach(function (c) {
-        c.reqs.forEach(function (r) { most = Math.max(most, r.submitted, r.qty); });
+        var cover = c.openings ? Math.round((c.submitted / c.openings) * 100) : 0;
+        inner += '<div class="apair">' +
+          '<div class="apairhead">' + aEsc(c.client) +
+            '<b class="' + (cover >= 100 ? 'ok' : cover === 0 ? 'warn' : '') + '">' +
+            cover + '%</b></div>' +
+          bar('openings', c.openings, most, '#c7d2e0', String(c.openings)) +
+          bar('candidates', c.submitted, most, '#00a8a8', String(c.submitted)) +
+          (c.uncovered ? '<p class="anote">' + c.uncovered + ' req' +
+             (c.uncovered === 1 ? '' : 's') + ' with nobody on it</p>' : '') +
+          '</div>';
       });
+      html += card('Coverage by client', 'candidates against openings', inner);
 
+      // 2. the pipeline
+      var stageMost = 1;
+      data.stages.forEach(function (p) { stageMost = Math.max(stageMost, p[1]); });
+      inner = '';
+      data.stages.forEach(function (p) {
+        inner += bar(p[0], p[1], stageMost, STAGE_COLOUR[p[0]] || '#8b9099', String(p[1]));
+      });
+      html += card('Pipeline', 'live candidates by status',
+                   inner || '<p class="anote">No candidates yet.</p>');
+
+      // 3. load per TA, split by stage
+      inner = '';
+      var taMost = 1;
+      data.tas.forEach(function (ta) { taMost = Math.max(taMost, ta.total); });
+      data.tas.forEach(function (ta) {
+        var segs = '';
+        data.stage_order.forEach(function (stage) {
+          var n = ta.stages[stage] || 0;
+          if (!n) { return; }
+          segs += '<i style="width:' + ((n / taMost) * 100) + '%;background:' +
+                  STAGE_COLOUR[stage] + '" title="' + stage + ': ' + n + '"></i>';
+        });
+        inner += '<div class="abar"><span class="alabel">' + aEsc(ta.ta) + '</span>' +
+                 '<span class="atrack stacked">' + segs + '</span>' +
+                 '<span class="acount">' + ta.total + '</span></div>';
+      });
+      html += card('Load by TA', 'segments are pipeline stages',
+                   inner || '<p class="anote">Nobody assigned yet.</p>');
+
+      // 4. priority
+      inner = '';
+      var prioMost = 1;
+      data.priority.forEach(function (p) { prioMost = Math.max(prioMost, p.openings, p.reqs); });
+      data.priority.forEach(function (p) {
+        inner += '<div class="abar"><span class="alabel">' +
+          '<i class="dot prio-' + p.name + '"></i>' + aEsc(p.meaning) + '</span>' +
+          '<span class="atrack"><i class="afill" style="width:' +
+            ((p.openings / prioMost) * 100) + '%;background:' + PRIO_COLOUR[p.name] + '"></i></span>' +
+          '<span class="acount">' + p.openings +
+            '<i class="adrop">' + p.reqs + ' req' + (p.reqs === 1 ? '' : 's') + '</i></span></div>';
+      });
+      html += card('Openings by priority', '', inner);
+
+      // 5. ageing
+      inner = '';
+      var ageMost = 1;
+      data.ageing.forEach(function (r) { ageMost = Math.max(ageMost, r.days); });
+      data.ageing.forEach(function (r) {
+        inner += '<div class="abar"' +
+          ' title="' + aEsc(r.client) + ' - ' + r.submitted + ' of ' + r.qty + ' covered">' +
+          '<span class="alabel">' + aEsc(r.label) + '</span>' +
+          '<span class="atrack"><i class="afill" style="width:' +
+            ((r.days / ageMost) * 100) + '%;background:' +
+            (r.submitted ? '#c7d2e0' : '#dc2626') + '"></i></span>' +
+          '<span class="acount">' + r.days + 'd' +
+            '<i class="adrop">' + r.submitted + '/' + r.qty + '</i></span></div>';
+      });
+      html += card('Open longest', 'red means nobody submitted yet',
+                   inner || '<p class="anote">No dated reqs.</p>');
+
+      // 6. the mix
+      inner = '<div class="amix"><h4>Type</h4>';
+      data.types.forEach(function (r) {
+        inner += '<span class="chip chip-soft">' + aEsc(r.name) + ' ' + r.openings + '</span>';
+      });
+      inner += '</div><div class="amix"><h4>Work auth</h4>';
+      data.auth.forEach(function (r) {
+        inner += '<span class="chip chip-soft">' + aEsc(r.name) + ' ' + r.reqs + '</span>';
+      });
+      inner += '</div>';
+      html += card('Mix', 'openings by type, reqs by work auth', inner);
+
+      html += '</div>';
+
+      // the per-req detail, kept at the end
+      var detail = '';
       data.clients.forEach(function (c) {
-        html += '<div class="agroup"><div class="ahead">' + aEsc(c.client) +
-                '<span>' + c.submitted + ' submitted / ' + c.openings + ' open</span></div>';
+        detail += '<div class="agroup"><div class="ahead">' + aEsc(c.client) +
+                  '<span>' + c.submitted + ' live / ' + c.openings + ' open</span></div>';
+        var reqMost = 1;
+        c.reqs.forEach(function (r) { reqMost = Math.max(reqMost, r.submitted, r.qty); });
         c.reqs.forEach(function (r) {
-          var pct = (r.submitted / most) * 100;
-          var target = (r.qty / most) * 100;
+          var pct = (r.submitted / reqMost) * 100, target = (r.qty / reqMost) * 100;
           var full = r.qty && r.submitted >= r.qty;
-          html += '<div class="abar">' +
-            '<span class="alabel" title="' + aEsc(r.label) + '">' + aEsc(r.label) + '</span>' +
-            '<span class="atrack">' +
-              '<i class="afill' + (full ? ' full' : '') + '" style="width:' + pct + '%"></i>' +
-              (r.qty ? '<i class="atarget" style="left:' + target + '%" title="' +
-                        r.qty + ' opening(s)"></i>' : '') +
-            '</span>' +
-            '<span class="acount">' + r.submitted +
-              (r.qty ? '<em>/' + r.qty + '</em>' : '') +
-              (r.dropped ? '<i class="adrop">+' + r.dropped + ' out</i>' : '') +
+          detail += '<div class="abar"><span class="alabel" title="' + aEsc(r.label) + '">' +
+            aEsc(r.label) + '</span><span class="atrack">' +
+            '<i class="afill' + (full ? ' full' : '') + '" style="width:' + pct + '%"></i>' +
+            (r.qty ? '<i class="atarget" style="left:' + target + '%"></i>' : '') +
+            '</span><span class="acount">' + r.submitted +
+            (r.qty ? '<em>/' + r.qty + '</em>' : '') +
+            (r.dropped ? '<i class="adrop">+' + r.dropped + ' out</i>' : '') +
             '</span></div>';
         });
-        html += '</div>';
+        detail += '</div>';
       });
+      html += '<details class="adetail"><summary>Every req, one bar each</summary>' +
+              detail + '</details>';
 
-      if (data.by_ta && data.by_ta.length) {
-        html += '<h3 class="jh3">By TA</h3><div class="atas">';
-        data.by_ta.forEach(function (pair) {
-          html += '<span class="chip chip-soft">' + aEsc(pair[0]) + ' ' + pair[1] + '</span>';
-        });
-        html += '</div>';
-      }
-
-      html += '<p class="jempty" style="padding:12px 2px 0;">' +
-              'Bar length is live candidates; the marker is the opening count. ' +
-              'Struck-out names are excluded.</p>';
+      html += '<p class="jempty" style="padding:10px 2px 0;">' +
+              'Struck-out candidates are left out of every count.</p>';
       host.innerHTML = html;
     }
 
@@ -849,52 +945,136 @@ def reqs_page():
     )
 
 
+# candidate statuses are free text, so bucket them into a pipeline
+PIPELINE = (
+    ("Placed",     ("placed", "started", "joined", "onboard", "on board", "billing")),
+    ("Offer",      ("offer", "selected", "accept")),
+    ("Interview",  ("interview", "client round", "round ", "f2f", "panel", "loop")),
+    ("Screening",  ("screen", "prescreen", "phone", "qualif", "intake", "review")),
+    ("Submitted",  ("submit", "sent", "shared", "presented", "profile")),
+    ("Rejected",   ("reject", "declin", "drop", "not moving", "no go", "lost",
+                    "backed out", "hold", "closed")),
+)
+STAGE_ORDER = ("Submitted", "Screening", "Interview", "Offer", "Placed", "Rejected", "Other")
+
+
+def stage_of(status):
+    low = " " + (status or "").strip().lower() + " "
+    if not low.strip():
+        return "Submitted"
+    for name, words in PIPELINE:
+        if any(w in low for w in words):
+            return name
+    return "Other"
+
+
+def days_open(req, today=None):
+    when = (req.get("Date") or "").strip()
+    try:
+        opened = datetime.strptime(when[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+    return ((today or datetime.now().date()) - opened).days
+
+
 @bp.route("/reqs/analytics")
 def reqs_analytics():
-    """Candidates submitted against each requirement, grouped by client."""
+    """Everything the analytics panel draws, counted once here."""
     reqs = filter_reqs(read_reqs(),
                        request.args.get("q", "").strip(),
                        request.args.get("client", "").strip(),
                        request.args.get("type", "").strip(),
                        request.args.get("priority", "").strip())
 
+    def live(req):
+        return [c for c in req["candidates"] if not c.get("struck")]
+
+    # ---- per client, and per req inside it
     clients = {}
     for req in reqs:
         name = req["Client"] or "(no client)"
         bucket = clients.setdefault(name, {"client": name, "reqs": [],
-                                           "submitted": 0, "openings": 0})
-        live = [c for c in req["candidates"] if not c.get("struck")]
+                                           "submitted": 0, "openings": 0, "uncovered": 0})
+        people = live(req)
         bucket["reqs"].append({
             "label": req["Req"] or req["Type"] or req["Req ID"][-4:],
-            "submitted": len(live),
-            "dropped": len(req["candidates"]) - len(live),
+            "submitted": len(people),
+            "dropped": len(req["candidates"]) - len(people),
             "qty": req["_qty"],
             "colour": req["colour"],
         })
-        bucket["submitted"] += len(live)
+        bucket["submitted"] += len(people)
         bucket["openings"] += req["_qty"]
-
-    ordered = sorted(clients.values(), key=lambda c: (-c["submitted"], c["client"]))
+        if not people:
+            bucket["uncovered"] += 1
+    ordered = sorted(clients.values(), key=lambda c: (-c["openings"], c["client"]))
     for bucket in ordered:
         bucket["reqs"].sort(key=lambda r: -r["submitted"])
 
-    by_ta = {}
+    # ---- the pipeline, and each TA's share of it
+    stages = {name: 0 for name in STAGE_ORDER}
+    tas = {}
     for req in reqs:
-        for cand in req["candidates"]:
-            if cand.get("struck"):
-                continue
-            key = cand.get("ta") or "unassigned"
-            by_ta[key] = by_ta.get(key, 0) + 1
+        for cand in live(req):
+            stage = stage_of(cand.get("Status", ""))
+            stages[stage] = stages.get(stage, 0) + 1
+            who = cand.get("ta") or "unassigned"
+            row = tas.setdefault(who, {"ta": who, "total": 0,
+                                       "stages": {n: 0 for n in STAGE_ORDER}})
+            row["total"] += 1
+            row["stages"][stage] += 1
+
+    # ---- reqs and openings by priority, type and work auth
+    def tally(key):
+        out = {}
+        for req in reqs:
+            name = (req.get(key) or "(blank)") if key != "colour" else req["colour"]
+            row = out.setdefault(name, {"name": name, "reqs": 0, "openings": 0, "submitted": 0})
+            row["reqs"] += 1
+            row["openings"] += req["_qty"]
+            row["submitted"] += len(live(req))
+        return out
+
+    priority = [dict(tally("colour").get(c, {"name": c, "reqs": 0, "openings": 0, "submitted": 0}))
+                for c in PRIORITY_COLOURS]
+    for row in priority:
+        row["meaning"] = PRIORITY_MEANING.get(row["name"], "")
+
+    # ---- ageing: the reqs that have been open longest
+    ageing = []
+    for req in reqs:
+        age = days_open(req)
+        if age is None:
+            continue
+        people = live(req)
+        ageing.append({"label": req["Req"] or req["Type"] or req["Req ID"][-4:],
+                       "client": req["Client"], "days": age,
+                       "submitted": len(people), "qty": req["_qty"],
+                       "colour": req["colour"]})
+    ageing.sort(key=lambda r: -r["days"])
+
+    ages = [r["days"] for r in ageing]
+    submitted_total = sum(len(live(r)) for r in reqs)
+    openings_total = sum(r["_qty"] for r in reqs)
 
     return jsonify({
         "clients": ordered,
+        "stages": [[name, stages.get(name, 0)] for name in STAGE_ORDER if stages.get(name, 0)],
+        "tas": sorted(tas.values(), key=lambda t: -t["total"]),
+        "priority": priority,
+        "types": sorted(tally("Type").values(), key=lambda r: -r["openings"]),
+        "auth": sorted(tally("Work Auth").values(), key=lambda r: -r["reqs"]),
+        "ageing": ageing[:10],
+        "stage_order": list(STAGE_ORDER),
         "totals": {
             "reqs": len(reqs),
             "clients": len(ordered),
-            "submitted": sum(c["submitted"] for c in ordered),
-            "openings": sum(c["openings"] for c in ordered),
+            "submitted": submitted_total,
+            "openings": openings_total,
+            "uncovered": sum(1 for r in reqs if not live(r)),
+            "oldest": max(ages) if ages else 0,
+            "median_age": sorted(ages)[len(ages) // 2] if ages else 0,
         },
-        "by_ta": sorted(by_ta.items(), key=lambda kv: -kv[1]),
     })
 
 

@@ -2000,6 +2000,54 @@ STYLE = """
       font-size: 12.5px; padding: 0 2px 0 6px; text-align: center;
     }
 
+    /* analytics dashboard */
+    .agrid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(430px, 1fr));
+      gap: 16px; margin-top: 6px;
+    }
+    .acard {
+      border: 1px solid var(--line-soft); border-radius: 11px; padding: 13px 15px 15px;
+      background: #fff;
+    }
+    .acard h3 {
+      margin: 0 0 11px; font-size: 13px; color: var(--brand); font-weight: 700;
+      display: flex; align-items: baseline; gap: 8px;
+    }
+    .acard h3 span {
+      margin-left: auto; font-size: 11px; font-weight: 500; color: var(--ink-faint);
+      text-align: right;
+    }
+    .acard .alabel { flex: 0 1 150px; display: flex; align-items: center; }
+    .acard .alabel .dot { margin-right: 7px; }
+    .acard .acount { flex: 0 0 82px; }
+    .acard .atrack { min-width: 90px; }
+    .acard .abar { margin-bottom: 6px; }
+    .apair { margin-bottom: 11px; }
+    .apair:last-child { margin-bottom: 0; }
+    .apairhead {
+      display: flex; font-size: 12.5px; font-weight: 600; color: var(--ink);
+      margin-bottom: 3px;
+    }
+    .apairhead b { margin-left: auto; font-weight: 700; color: var(--ink-faint); }
+    .apairhead b.ok { color: #16a34a; }
+    .apairhead b.warn { color: var(--red); }
+    .anote { font-size: 11.5px; color: var(--ink-faint); margin: 3px 0 0; }
+    .jstat b.warn { color: var(--red); }
+    .atrack.stacked { display: flex; }
+    .atrack.stacked i { position: static; height: 100%; border-radius: 0; }
+    .amix { margin-bottom: 10px; }
+    .amix h4 {
+      margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+      color: var(--ink-faint); font-weight: 700;
+    }
+    .amix .chip { margin: 0 6px 6px 0; }
+    .adetail { margin-top: 18px; }
+    #amodal .jcard { max-width: 1180px; }
+    .adetail summary {
+      cursor: pointer; font-size: 12.5px; color: var(--accent); font-weight: 600;
+      padding: 6px 0;
+    }
+
     /* submissions-by-client chart */
     .agroup { margin-bottom: 18px; }
     .ahead {
