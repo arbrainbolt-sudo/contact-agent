@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 from flask import Flask, request, redirect, url_for, render_template_string, jsonify
 from events import bp as events_bp
 from expenses import bp as expenses_bp
+from openreqs import bp as openreqs_bp
 import contact_agent
 import crm
 import linkedin
@@ -24,6 +25,7 @@ import youtube
 app = Flask(__name__)
 app.register_blueprint(events_bp)
 app.register_blueprint(expenses_bp)
+app.register_blueprint(openreqs_bp)
 
 state = {"running": False, "target": "", "country": "", "log": []}
 news_state = {"running": False, "log": [], "last_run": "", "last_run_ts": 0.0}
@@ -1954,6 +1956,43 @@ STYLE = """
     .receiptname { font-size: 12.5px; color: var(--ink-faint); }
     .receiptname.has { color: var(--accent); font-weight: 600; }
 
+    /* open reqs */
+    .reqcard {
+      background: #fff; border: 1px solid var(--line-soft); border-radius: 12px;
+      padding: 14px 16px; margin-bottom: 14px;
+      box-shadow: 0 1px 3px rgba(15, 47, 92, .06);
+    }
+    .reqtop { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+    .reqtop > .prio { margin-bottom: 9px; }
+    .reqfield { flex: 0 1 148px; min-width: 110px; }
+    .reqfield.grow { flex: 0 1 230px; }
+    .reqform .expfield.wide { flex: 0 1 230px; max-width: 230px; }
+    .reqform .expfield { flex: 0 1 150px; }
+    .reqform .expfield:last-child { flex: 0 0 auto; margin-left: 10px; }
+    .reqfield.qty { flex: 0 0 74px; min-width: 74px; }
+    .reqfield.rate { flex: 0 0 104px; min-width: 104px; }
+    .reqfield input, .reqfield select { width: 100%; }
+
+    .reqpeople { margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 12px; }
+    .peoplehead { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+    .peoplecount { font-size: 12px; color: var(--ink-faint); }
+    .peoplehead .addname { margin-left: auto; }
+    .namelist { display: flex; flex-direction: column; gap: 7px; }
+    .namerow { display: flex; gap: 8px; align-items: center; }
+    input.name20 { width: 20ch; min-width: 20ch; font-size: 13px; }
+    .rowx {
+      background: none; border: 0; cursor: pointer; font-size: 19px; line-height: 1;
+      color: var(--ink-faint); padding: 0 4px;
+    }
+    .rowx:hover { color: var(--red); }
+
+    .reqfoot {
+      display: flex; align-items: center; gap: 12px;
+      margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line-soft);
+    }
+    .reqid { font-size: 11.5px; color: var(--ink-faint); font-variant-numeric: tabular-nums; }
+    .reqfoot .btn-danger { margin-left: auto; }
+
     /* paste-a-receipt dialog */
     .pastewrap {
       display: none; position: fixed; inset: 0; z-index: 95;
@@ -2327,6 +2366,7 @@ HEADER = """
         <a href="/x" class="{% if tab == 'x' %}on{% endif %}">X</a>
         <a href="/events" class="{% if tab == 'events' %}on{% endif %}">Events</a>
         <a href="/expenses" class="{% if tab == 'expenses' %}on{% endif %}">Expenses</a>
+        <a href="/reqs" class="{% if tab == 'reqs' %}on{% endif %}">Open Reqs</a>
       </nav>
 
       <div class="spacer"></div>

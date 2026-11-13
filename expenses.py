@@ -647,7 +647,7 @@ def expenses_add():
     except ValueError:
         amount = ""
 
-    expense_id = datetime.now().strftime("E%Y%m%d%H%M%S")
+    expense_id = datetime.now().strftime("E%Y%m%d%H%M%S%f")
     group_id = (form.get("group_id", "") or "").strip()
     receipt = save_receipt(request.files.get("receipt"), group_id, expense_id)
 
@@ -718,5 +718,3 @@ def expenses_receipt(excel_row):
 def expenses_delete(excel_row):
     delete_expense(excel_row)
     return redirect(url_for("expenses.expenses_page", group=request.form.get("group", "") or None))
-
-
