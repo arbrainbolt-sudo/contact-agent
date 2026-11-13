@@ -1965,13 +1965,24 @@ STYLE = """
     .reqtop { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
     .reqtop > .prio { margin-bottom: 9px; }
     .reqfield { flex: 0 1 148px; min-width: 110px; }
-    .reqfield.grow { flex: 0 1 230px; }
-    .reqform .expfield.wide { flex: 0 1 230px; max-width: 230px; }
+    .reqfield.grow { flex: 0 1 190px; }
+    .reqfield.auth { flex: 0 0 118px; min-width: 118px; }
+    .reqfield.auth select { width: 100%; }
+    .reqform .expfield.wide { flex: 0 1 196px; max-width: 196px; }
+    .reqform .expfield.auth { flex: 0 0 118px; min-width: 118px; }
     .reqform .expfield { flex: 0 1 150px; }
     .reqform .expfield:last-child { flex: 0 0 auto; margin-left: 10px; }
-    .reqfield.qty { flex: 0 0 74px; min-width: 74px; }
-    .reqfield.rate { flex: 0 0 104px; min-width: 104px; }
-    .reqfield input, .reqfield select { width: 100%; }
+    .reqfield.qty { flex: 0 0 62px; min-width: 62px; }
+    .reqfield.rate { flex: 0 0 76px; min-width: 76px; }
+    .reqform .expfield.narrow, .reqfield.qty select { min-width: 62px; }
+    .reqform .expfield.rate { flex: 0 0 86px; min-width: 86px; }
+    .reqform .expfield.rate input { width: 100%; }
+    /* the shared select rule sets a min-width that would overflow these boxes */
+    .reqfield input, .reqfield select,
+    .reqform .expfield input, .reqform .expfield select {
+      width: 100%; min-width: 0; height: 38px; box-sizing: border-box;
+    }
+    .reqform .expfield input[type=file] { height: auto; }
 
     .reqpeople { margin-top: 14px; border-top: 1px dashed var(--line); padding-top: 12px; }
     .peoplehead { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }

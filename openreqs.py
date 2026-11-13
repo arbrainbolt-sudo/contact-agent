@@ -27,12 +27,17 @@ bp = Blueprint("openreqs", __name__)
 REQ_SHEET = os.getenv("OPENREQ_SHEET", "OpenReqs")
 CAND_SHEET = os.getenv("OPENREQ_CAND_SHEET", "OpenReqCandidates")
 
-REQ_HEADERS = ("Req ID", "Priority", "Qty", "Client", "Date", "Rate",
-               "Location", "Relocation", "Type", "Added")
+REQ_HEADERS = ("Req ID", "Priority", "Qty", "Client", "Req", "Work Auth", "Date",
+               "Rate", "Location", "Relocation", "Type", "Added")
 CAND_HEADERS = ("Req ID", "Name", "Status", "Added")
 
-QTY_CHOICES = [str(n) for n in range(1, 26)]
+# the order the fields appear on screen, and what each sort button offers
+FIELD_ORDER = ("Priority", "Qty", "Client", "Req", "Work Auth", "Date", "Rate",
+               "Location", "Relocation", "Type")
+
+QTY_CHOICES = [str(n) for n in range(1, 100)]
 RELOCATION_CHOICES = ("Remote", "Hybrid", "On site")
+WORKAUTH_CHOICES = ("OPT+", "H1+", "GC+", "USC Only")
 TYPE_CHOICES = ("Contract", "C2H", "FT")
 
 # same four colours as the CRM priority swatch
@@ -63,19 +68,46 @@ def _store_lock():
     return contextlib.nullcontext()
 
 
+def _header_map(page):
+    """Header text -> column number, read from row 1 as the sheet actually has it."""
+    found = {}
+    for col in range(1, max(page.max_column, 1) + 1):
+        name = str(page.cell(row=1, column=col).value or "").strip()
+        if name and name not in found:
+            found[name] = col
+    return found
+
+
 def _sheet(book, name, headers):
+    """Make the sheet if it is missing, and add any column the code knows but it lacks.
+
+    Columns are addressed by their header text, never by position, so a new
+    field appends to the end of an existing sheet without disturbing the data.
+    """
     if name not in book.sheetnames:
         page = book.create_sheet(name)
         for i, header in enumerate(headers, start=1):
             page.cell(row=1, column=i).value = header
         print(f"created the {name} sheet in {store.XLSX_FILE}")
         return page, True
+
     page = book[name]
-    if not str(page.cell(row=1, column=1).value or "").strip():
+    found = _header_map(page)
+    if not found:
         for i, header in enumerate(headers, start=1):
             page.cell(row=1, column=i).value = header
         return page, True
-    return page, False
+
+    changed = False
+    at = max(found.values())
+    for header in headers:
+        if header not in found:
+            at += 1
+            page.cell(row=1, column=at).value = header
+            found[header] = at
+            changed = True
+            print(f"added a {header!r} column to {name} in {store.XLSX_FILE}")
+    return page, changed
 
 
 def open_book():
@@ -90,14 +122,15 @@ def open_book():
 
 
 def _rows_of(page, headers):
+    columns = _header_map(page)
     out = []
     for r in range(2, page.max_row + 1):
-        values = [page.cell(row=r, column=i + 1).value for i in range(len(headers))]
-        if not any(str(v or "").strip() for v in values):
-            continue
         row = {"_row": r}
-        for key, value in zip(headers, values):
-            row[key] = str(value or "").strip()
+        for header in headers:
+            col = columns.get(header)
+            row[header] = str(page.cell(row=r, column=col).value or "").strip() if col else ""
+        if not any(row[h] for h in headers):
+            continue
         out.append(row)
     return out
 
@@ -121,20 +154,50 @@ def read_reqs():
             req["_qty"] = int(req.get("Qty") or 0)
         except ValueError:
             req["_qty"] = 0
-    reqs.sort(key=lambda r: (PRIORITY_ORDER.get(r["colour"], 3), r.get("Date", "")), reverse=False)
     return reqs
+
+
+def _money(text):
+    """'$78/hr' or '$140k' -> a number we can sort on."""
+    cleaned = re.sub(r"[^0-9.kK]", "", str(text or ""))
+    multiplier = 1000 if cleaned[-1:].lower() == "k" else 1
+    cleaned = cleaned.rstrip("kK")
+    try:
+        return float(cleaned or 0) * multiplier
+    except ValueError:
+        return 0.0
+
+
+def sort_reqs(reqs, field, direction):
+    """Sort by any one field. Priority runs hot-first, Qty and Rate numerically."""
+    backwards = direction == "desc"
+
+    if field == "Priority":
+        key = lambda r: PRIORITY_ORDER.get(r["colour"], 3)
+    elif field == "Qty":
+        key = lambda r: r["_qty"]
+    elif field == "Rate":
+        key = lambda r: _money(r.get("Rate", ""))
+    elif field in FIELD_ORDER:
+        key = lambda r: str(r.get(field, "")).strip().lower()
+    else:                                   # nothing chosen: hottest, then soonest
+        return sorted(reqs, key=lambda r: (PRIORITY_ORDER.get(r["colour"], 3),
+                                           r.get("Date", "")))
+    return sorted(reqs, key=key, reverse=backwards)
 
 
 def add_req(values):
     with _store_lock():
         book = open_book()
         page = book[REQ_SHEET]
+        columns = _header_map(page)
         at = page.max_row + 1
-        while at > 2 and not any(page.cell(row=at - 1, column=i + 1).value
-                                 for i in range(len(REQ_HEADERS))):
+        while at > 2 and not any(page.cell(row=at - 1, column=c).value
+                                 for c in columns.values()):
             at -= 1
-        for i, header in enumerate(REQ_HEADERS, start=1):
-            page.cell(row=at, column=i).value = values.get(header, "")
+        for header, col in columns.items():
+            if header in values:
+                page.cell(row=at, column=col).value = values[header]
         book.save(store.XLSX_FILE)
         book.close()
     return at
@@ -146,12 +209,13 @@ def save_req(req_id, values, names, statuses):
         book = open_book()
         page = book[REQ_SHEET]
 
+        columns = _header_map(page)
         for row in _rows_of(page, REQ_HEADERS):
             if row["Req ID"] != req_id:
                 continue
-            for i, header in enumerate(REQ_HEADERS, start=1):
+            for header, col in columns.items():
                 if header in values:
-                    page.cell(row=row["_row"], column=i).value = values[header]
+                    page.cell(row=row["_row"], column=col).value = values[header]
             break
 
         cands = book[CAND_SHEET]
@@ -161,13 +225,17 @@ def save_req(req_id, values, names, statuses):
                 cands.delete_rows(row["_row"], 1)
 
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        cand_cols = _header_map(cands)
         at = cands.max_row + 1
         for name, status in zip(names, statuses):
             name, status = (name or "").strip(), (status or "").strip()
             if not name and not status:
                 continue
-            for i, value in enumerate((req_id, name, status, stamp), start=1):
-                cands.cell(row=at, column=i).value = value
+            for header, value in (("Req ID", req_id), ("Name", name),
+                                  ("Status", status), ("Added", stamp)):
+                col = cand_cols.get(header)
+                if col:
+                    cands.cell(row=at, column=col).value = value
             at += 1
 
         book.save(store.XLSX_FILE)
@@ -245,11 +313,21 @@ _PAGE_BODY = """
             {% for c in clients %}<option value="{{ c }}">{% endfor %}
           </datalist>
         </div>
+        <div class="expfield wide">
+          <label class="fieldlabel" for="req">Req</label>
+          <input type="text" id="req" name="req" placeholder="role or req number">
+        </div>
+        <div class="expfield auth">
+          <label class="fieldlabel" for="work_auth">Work Auth</label>
+          <select id="work_auth" name="work_auth">
+            {% for w in workauth_choices %}<option value="{{ w }}">{{ w }}</option>{% endfor %}
+          </select>
+        </div>
         <div class="expfield">
           <label class="fieldlabel" for="date">Date</label>
           <input type="date" id="date" name="date" value="{{ today }}">
         </div>
-        <div class="expfield narrow">
+        <div class="expfield rate">
           <label class="fieldlabel" for="rate">Rate</label>
           <input type="text" id="rate" name="rate" placeholder="$75/hr">
         </div>
@@ -335,6 +413,20 @@ _PAGE_BODY = """
       {% endfor %}
     </span>
     {% if saved %}<span class="savedflash">Saved</span>{% endif %}
+
+    <span class="sortbar">
+      <span style="font-size:12px; color:var(--ink-faint);">Sort:</span>
+      {% for field in sort_fields %}
+        <a class="sortbtn {% if sort == field %}on{% endif %}"
+           href="/reqs?sort={{ field }}&dir={% if sort == field and direction == 'asc' %}desc{% else %}asc{% endif %}{% if q %}&q={{ q }}{% endif %}{% if client %}&client={{ client }}{% endif %}{% if kind %}&type={{ kind }}{% endif %}{% if prio %}&priority={{ prio }}{% endif %}">
+          {{ field }}{% if sort == field %} {% if direction == 'asc' %}&uarr;{% else %}&darr;{% endif %}{% endif %}
+        </a>
+      {% endfor %}
+      {% if sort %}
+        <a class="sortbtn clear"
+           href="/reqs{% if q %}?q={{ q }}{% endif %}">clear</a>
+      {% endif %}
+    </span>
   </div>
 
   {% if reqs %}
@@ -360,6 +452,18 @@ _PAGE_BODY = """
           <div class="reqfield grow">
             <label class="fieldlabel">Client</label>
             <input type="text" name="client" value="{{ req.Client }}" list="clientlist">
+          </div>
+          <div class="reqfield grow">
+            <label class="fieldlabel">Req</label>
+            <input type="text" name="req" value="{{ req.Req }}" placeholder="role or req number">
+          </div>
+          <div class="reqfield auth">
+            <label class="fieldlabel">Work Auth</label>
+            <select name="work_auth">
+              {% for w in workauth_choices %}
+                <option value="{{ w }}" {% if w == req['Work Auth'] %}selected{% endif %}>{{ w }}</option>
+              {% endfor %}
+            </select>
           </div>
           <div class="reqfield">
             <label class="fieldlabel">Date</label>
@@ -513,6 +617,10 @@ def reqs_page():
 
         shown = [r for r in shown if hit(r)]
 
+    sort = request.args.get("sort", "").strip()
+    direction = request.args.get("dir", "asc").strip()
+    shown = sort_reqs(shown, sort, direction)
+
     return render_template_string(
         openreqs_template(),
         reqs=shown,
@@ -522,10 +630,13 @@ def reqs_page():
         clients=sorted({r["Client"] for r in reqs if r["Client"]}),
         qty_choices=QTY_CHOICES,
         relocation_choices=RELOCATION_CHOICES,
+        workauth_choices=WORKAUTH_CHOICES,
         type_choices=TYPE_CHOICES,
         colours=list(PRIORITY_COLOURS),
         meaning=PRIORITY_MEANING,
         q=q, client=client, kind=kind, prio=prio,
+        sort=sort, direction=direction,
+        sort_fields=list(FIELD_ORDER),
         today=datetime.now().date().isoformat(),
         workbook=store.XLSX_FILE,
         req_sheet=REQ_SHEET,
@@ -545,6 +656,8 @@ def reqs_add():
         "Priority": priority_label(priority_of(form.get("priority", ""))),
         "Qty": (form.get("qty", "") or "").strip(),
         "Client": (form.get("client", "") or "").strip(),
+        "Req": (form.get("req", "") or "").strip(),
+        "Work Auth": (form.get("work_auth", "") or "").strip(),
         "Date": (form.get("date", "") or "").strip(),
         "Rate": (form.get("rate", "") or "").strip(),
         "Location": (form.get("location", "") or "").strip(),
@@ -564,6 +677,8 @@ def reqs_save():
             "Priority": priority_label(priority_of(form.get("priority", ""))),
             "Qty": (form.get("qty", "") or "").strip(),
             "Client": (form.get("client", "") or "").strip(),
+            "Req": (form.get("req", "") or "").strip(),
+            "Work Auth": (form.get("work_auth", "") or "").strip(),
             "Date": (form.get("date", "") or "").strip(),
             "Rate": (form.get("rate", "") or "").strip(),
             "Location": (form.get("location", "") or "").strip(),
