@@ -1994,6 +1994,21 @@ STYLE = """
     input.name20 { width: 20ch; min-width: 20ch; font-size: 13px; }
     input.status60 { width: 60ch; min-width: 60ch; font-size: 13px; }
     .nonames { font-size: 12.5px; color: var(--ink-faint); margin: 2px 0 0; }
+
+    /* per-candidate marks */
+    .rowmark {
+      background: #fff; border: 1px solid var(--line); border-radius: 6px;
+      width: 26px; height: 26px; line-height: 1; cursor: pointer; padding: 0;
+      font-size: 12px; font-weight: 700; color: var(--ink-faint);
+    }
+    .rowmark:hover { border-color: var(--accent); color: var(--accent); }
+    .rowmark.tint { color: #86c9a2; font-size: 14px; }
+    .rowmark.strike.on { background: var(--brand); border-color: var(--brand); color: #fff; }
+    .rowmark.tint.on { background: #d9f2e4; border-color: #8fd6ae; color: #2f8a5b; }
+    .namerow.struck input.name20, .namerow.struck input.status60 {
+      text-decoration: line-through; color: var(--ink-faint);
+    }
+    .namerow.green input.name20 { background: #eafaf0; border-color: #b7e4c7; }
     .peoplehead .btn-primary { margin-left: 4px; }
     .peoplehead .reqid { margin-left: auto; }
     .peoplehead .btn-danger { margin-left: 4px; }

@@ -29,7 +29,7 @@ CAND_SHEET = os.getenv("OPENREQ_CAND_SHEET", "OpenReqCandidates")
 
 REQ_HEADERS = ("Req ID", "Priority", "Qty", "Client", "Req", "Work Auth", "Date",
                "Rate", "Location", "Relocation", "Type", "Added")
-CAND_HEADERS = ("Req ID", "Name", "Status", "Added")
+CAND_HEADERS = ("Req ID", "Name", "Status", "Struck", "Highlight", "Added")
 
 # the order the fields appear on screen, and what each sort button offers
 FIELD_ORDER = ("Priority", "Qty", "Client", "Req", "Work Auth", "Date", "Rate",
@@ -150,6 +150,9 @@ def read_reqs():
     for req in reqs:
         req["colour"] = priority_of(req.get("Priority", ""))
         req["candidates"] = by_req.get(req["Req ID"], [])
+        for person in req["candidates"]:
+            person["struck"] = str(person.get("Struck", "")).strip().lower() in ("yes", "1", "true")
+            person["green"] = str(person.get("Highlight", "")).strip().lower() in ("green", "yes", "1", "true")
         try:
             req["_qty"] = int(req.get("Qty") or 0)
         except ValueError:
@@ -203,8 +206,11 @@ def add_req(values):
     return at
 
 
-def save_req(req_id, values, names, statuses):
-    """Update one req and replace its whole candidate list."""
+def save_req(req_id, values, people):
+    """Update one req and replace its whole candidate list.
+
+    people is a list of {"Name", "Status", "Struck", "Highlight"} dicts.
+    """
     with _store_lock():
         book = open_book()
         page = book[REQ_SHEET]
@@ -227,12 +233,15 @@ def save_req(req_id, values, names, statuses):
         stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
         cand_cols = _header_map(cands)
         at = cands.max_row + 1
-        for name, status in zip(names, statuses):
-            name, status = (name or "").strip(), (status or "").strip()
+        for person in people:
+            name = (person.get("Name") or "").strip()
+            status = (person.get("Status") or "").strip()
             if not name and not status:
                 continue
-            for header, value in (("Req ID", req_id), ("Name", name),
-                                  ("Status", status), ("Added", stamp)):
+            for header, value in (("Req ID", req_id), ("Name", name), ("Status", status),
+                                  ("Struck", "yes" if person.get("Struck") else ""),
+                                  ("Highlight", "green" if person.get("Highlight") else ""),
+                                  ("Added", stamp)):
                 col = cand_cols.get(header)
                 if col:
                     cands.cell(row=at, column=col).value = value
@@ -520,11 +529,17 @@ _PAGE_BODY = """
 
           <div class="namelist">
             {% for cand in req.candidates %}
-              <div class="namerow">
+              <div class="namerow{% if cand.struck %} struck{% endif %}{% if cand.green %} green{% endif %}">
                 <input type="text" name="c_{{ rid }}_name" class="name20" value="{{ cand.Name }}"
                        placeholder="Name" maxlength="60" oninput="markDirty()">
                 <input type="text" name="c_{{ rid }}_status" class="status60" value="{{ cand.Status }}"
                        placeholder="Status" maxlength="200" oninput="markDirty()">
+                <input type="hidden" name="c_{{ rid }}_struck" value="{% if cand.struck %}1{% endif %}">
+                <input type="hidden" name="c_{{ rid }}_green" value="{% if cand.green %}1{% endif %}">
+                <button type="button" class="rowmark strike{% if cand.struck %} on{% endif %}"
+                        title="Strike this candidate out" onclick="toggleStrike(this)">S</button>
+                <button type="button" class="rowmark tint{% if cand.green %} on{% endif %}"
+                        title="Shade the name box green" onclick="toggleGreen(this)">&#9679;</button>
                 <button type="button" class="rowx" title="Remove this line"
                         onclick="dropName(this)">&times;</button>
               </div>
@@ -604,11 +619,30 @@ _PAGE_BODY = """
         ' name="c_' + rid + '_name" oninput="markDirty()">' +
         '<input type="text" class="status60" placeholder="Status" maxlength="200"' +
         ' name="c_' + rid + '_status" oninput="markDirty()">' +
+        '<input type="hidden" name="c_' + rid + '_struck" value="">' +
+        '<input type="hidden" name="c_' + rid + '_green" value="">' +
+        '<button type="button" class="rowmark strike" title="Strike this candidate out"' +
+        ' onclick="toggleStrike(this)">S</button>' +
+        '<button type="button" class="rowmark tint" title="Shade the name box green"' +
+        ' onclick="toggleGreen(this)">&#9679;</button>' +
         '<button type="button" class="rowx" title="Remove this line"' +
         ' onclick="dropName(this)">&times;</button>';
       list.appendChild(row);
       row.querySelector('input').focus();
     }
+
+    function toggleMark(btn, cssClass, field) {
+      var row = btn.closest('.namerow');
+      var on = !row.classList.contains(cssClass);
+      row.classList.toggle(cssClass, on);
+      btn.classList.toggle('on', on);
+      var hidden = row.querySelector('input[name$="_' + field + '"]');
+      if (hidden) { hidden.value = on ? '1' : ''; }
+      markDirty();
+    }
+
+    function toggleStrike(btn) { toggleMark(btn, 'struck', 'struck'); }
+    function toggleGreen(btn) { toggleMark(btn, 'green', 'green'); }
 
     function dropName(btn) {
       var list = btn.closest('.namelist');
@@ -734,15 +768,30 @@ def reqs_save():
 
         names = form.getlist(f"c_{req_id}_name")
         statuses = form.getlist(f"c_{req_id}_status")
-        pairs = [(n.strip(), s.strip()) for n, s in zip(names, statuses)
-                 if n.strip() or s.strip()]
-        was = [(c.get("Name", ""), c.get("Status", "")) for c in current["candidates"]]
+        struck = form.getlist(f"c_{req_id}_struck")
+        green = form.getlist(f"c_{req_id}_green")
+
+        people = []
+        for i, name in enumerate(names):
+            name = (name or "").strip()
+            status = (statuses[i] if i < len(statuses) else "").strip()
+            if not name and not status:
+                continue
+            people.append({
+                "Name": name, "Status": status,
+                "Struck": bool((struck[i] if i < len(struck) else "").strip()),
+                "Highlight": bool((green[i] if i < len(green) else "").strip()),
+            })
+
+        was = [{"Name": c.get("Name", ""), "Status": c.get("Status", ""),
+                "Struck": c.get("struck", False), "Highlight": c.get("green", False)}
+               for c in current["candidates"]]
 
         fields_changed = any(values[h] != current.get(h, "") for _, h in FORM_FIELDS)
-        if not fields_changed and pairs == was:
+        if not fields_changed and people == was:
             continue
 
-        save_req(req_id, values, [n for n, _ in pairs], [s for _, s in pairs])
+        save_req(req_id, values, people)
         saved += 1
 
     return redirect(url_for("openreqs.reqs_page", saved=str(saved),
