@@ -1995,6 +1995,45 @@ STYLE = """
     input.status60 { width: 60ch; min-width: 60ch; font-size: 13px; }
     .nonames { font-size: 12.5px; color: var(--ink-faint); margin: 2px 0 0; }
 
+    select.ta2 {
+      width: 56px; min-width: 56px; height: 38px; box-sizing: border-box;
+      font-size: 12.5px; padding: 0 2px 0 6px; text-align: center;
+    }
+
+    /* submissions-by-client chart */
+    .agroup { margin-bottom: 18px; }
+    .ahead {
+      display: flex; align-items: baseline; gap: 10px; font-weight: 600;
+      color: var(--brand); font-size: 13.5px; margin-bottom: 7px;
+      border-bottom: 1px solid var(--line-soft); padding-bottom: 4px;
+    }
+    .ahead span { margin-left: auto; font-weight: 500; font-size: 12px; color: var(--ink-faint); }
+    .abar { display: flex; align-items: center; gap: 10px; margin-bottom: 5px; }
+    .alabel {
+      flex: 0 0 190px; font-size: 12.5px; color: var(--ink-soft);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .atrack {
+      position: relative; flex: 1 1 auto; height: 18px;
+      background: var(--canvas); border-radius: 4px; overflow: hidden;
+    }
+    .afill { position: absolute; inset: 0 auto 0 0; background: var(--accent); border-radius: 4px; }
+    .afill.full { background: #16a34a; }
+    .atarget {
+      position: absolute; top: -2px; bottom: -2px; width: 2px;
+      background: var(--brand); opacity: .55;
+    }
+    .acount {
+      flex: 0 0 118px; text-align: right; font-size: 12.5px; font-weight: 600;
+      color: var(--brand); font-variant-numeric: tabular-nums;
+    }
+    .acount .adrop {
+      font-style: normal; font-weight: 500; font-size: 11px;
+      color: var(--ink-faint); margin-left: 6px;
+    }
+    .acount em { font-style: normal; font-weight: 500; color: var(--ink-faint); }
+    .atas { display: flex; flex-wrap: wrap; gap: 8px; }
+
     /* per-candidate marks */
     .rowmark {
       background: #fff; border: 1px solid var(--line); border-radius: 6px;

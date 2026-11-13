@@ -16,7 +16,7 @@ import re
 import contextlib
 from datetime import datetime
 
-from flask import Blueprint, request, redirect, url_for, render_template_string
+from flask import Blueprint, request, redirect, url_for, render_template_string, jsonify
 
 import store
 import notify
@@ -29,7 +29,7 @@ CAND_SHEET = os.getenv("OPENREQ_CAND_SHEET", "OpenReqCandidates")
 
 REQ_HEADERS = ("Req ID", "Priority", "Qty", "Client", "Req", "Work Auth", "Date",
                "Rate", "Location", "Relocation", "Type", "Added")
-CAND_HEADERS = ("Req ID", "Name", "Status", "Struck", "Highlight", "Added")
+CAND_HEADERS = ("Req ID", "Name", "Status", "TA", "Struck", "Highlight", "Added")
 
 # the order the fields appear on screen, and what each sort button offers
 FIELD_ORDER = ("Priority", "Qty", "Client", "Req", "Work Auth", "Date", "Rate",
@@ -38,6 +38,7 @@ FIELD_ORDER = ("Priority", "Qty", "Client", "Req", "Work Auth", "Date", "Rate",
 QTY_CHOICES = [str(n) for n in range(1, 100)]
 RELOCATION_CHOICES = ("Remote", "Hybrid", "On site")
 WORKAUTH_CHOICES = ("OPT+", "H1+", "GC+", "USC Only")
+TA_CHOICES = ("", "MJ", "SK", "PK", "PH")       # who is working the candidate
 TYPE_CHOICES = ("Contract", "C2H", "FT")
 
 # same four colours as the CRM priority swatch
@@ -153,11 +154,34 @@ def read_reqs():
         for person in req["candidates"]:
             person["struck"] = str(person.get("Struck", "")).strip().lower() in ("yes", "1", "true")
             person["green"] = str(person.get("Highlight", "")).strip().lower() in ("green", "yes", "1", "true")
+            person["ta"] = (person.get("TA") or "").strip()
         try:
             req["_qty"] = int(req.get("Qty") or 0)
         except ValueError:
             req["_qty"] = 0
     return reqs
+
+
+def filter_reqs(reqs, q="", client="", kind="", prio=""):
+    """The one place the page and the chart agree on what is being shown."""
+    shown = list(reqs)
+    if client:
+        shown = [r for r in shown if r["Client"] == client]
+    if kind:
+        shown = [r for r in shown if r["Type"] == kind]
+    if prio:
+        shown = [r for r in shown if r["colour"] == prio]
+    if q:
+        needle = q.lower()
+
+        def hit(req):
+            fields = [str(req.get(h, "")) for h in REQ_HEADERS]
+            for cand in req["candidates"]:
+                fields += [cand.get("Name", ""), cand.get("Status", ""), cand.get("TA", "")]
+            return any(needle in f.lower() for f in fields)
+
+        shown = [r for r in shown if hit(r)]
+    return shown
 
 
 def _money(text):
@@ -239,6 +263,7 @@ def save_req(req_id, values, people):
             if not name and not status:
                 continue
             for header, value in (("Req ID", req_id), ("Name", name), ("Status", status),
+                                  ("TA", (person.get("TA") or "").strip()),
                                   ("Struck", "yes" if person.get("Struck") else ""),
                                   ("Highlight", "green" if person.get("Highlight") else ""),
                                   ("Added", stamp)):
@@ -403,6 +428,7 @@ _PAGE_BODY = """
         </div>
         <div style="align-self:flex-end; display:flex; gap:8px; align-items:center;">
           <button class="btn" type="submit">Search</button>
+          <button class="btn" type="button" onclick="openAnalytics()">&#128202; Analytics</button>
           {% if q or client or kind or prio %}
             <a href="/reqs" style="font-size:13px; color:var(--ink-soft);">Clear</a>
           {% endif %}
@@ -534,6 +560,11 @@ _PAGE_BODY = """
                        placeholder="Name" maxlength="60" oninput="markDirty()">
                 <input type="text" name="c_{{ rid }}_status" class="status60" value="{{ cand.Status }}"
                        placeholder="Status" maxlength="200" oninput="markDirty()">
+                <select name="c_{{ rid }}_ta" class="ta2" title="TA" onchange="markDirty()">
+                  {% for t in ta_choices %}
+                    <option value="{{ t }}" {% if t == cand.ta %}selected{% endif %}>{{ t or '-' }}</option>
+                  {% endfor %}
+                </select>
                 <input type="hidden" name="c_{{ rid }}_struck" value="{% if cand.struck %}1{% endif %}">
                 <input type="hidden" name="c_{{ rid }}_green" value="{% if cand.green %}1{% endif %}">
                 <button type="button" class="rowmark strike{% if cand.struck %} on{% endif %}"
@@ -564,6 +595,19 @@ _PAGE_BODY = """
     </div>
   {% endif %}
 
+  <div class="jmodal" id="amodal" onclick="if(event.target===this){closeAnalytics();}">
+    <div class="jcard" role="dialog" aria-label="Submissions by client">
+      <div class="jhead">
+        <div>
+          <h2>Submissions by requirement</h2>
+          <div class="jsub" id="asub"></div>
+        </div>
+        <button type="button" class="jclose" onclick="closeAnalytics()" aria-label="Close">&times;</button>
+      </div>
+      <div class="jbody" id="abody"></div>
+    </div>
+  </div>
+
   <script>
     var dirty = false;
     function markDirty() {
@@ -578,6 +622,10 @@ _PAGE_BODY = """
         if (dirty) { e.preventDefault(); e.returnValue = ''; }
       });
     });
+
+    var TA_OPTIONS = {{ ta_choices | tojson }}.map(function (t) {
+      return '<option value="' + t + '">' + (t || '-') + '</option>';
+    }).join('');
 
     var PRIORITY = [['blue', 'Blue', 'Cold'], ['red', 'Red', 'Hot'],
                     ['yellow', 'Yellow', 'Warm'], ['green', 'Green', 'Room Temp']];
@@ -604,6 +652,100 @@ _PAGE_BODY = """
       markDirty();
     }
 
+
+    // ---- analytics -----------------------------------------------------------
+    function aEsc(s) {
+      return String(s).replace(/[&<>"]/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+      });
+    }
+
+    function openAnalytics() {
+      var modal = document.getElementById('amodal');
+      var body = document.getElementById('abody');
+      body.innerHTML = '<p class="jempty">Counting...</p>';
+      document.getElementById('asub').textContent = '';
+      modal.classList.add('open');
+
+      fetch('/reqs/analytics' + window.location.search)
+        .then(function (r) { return r.json(); })
+        .then(function (data) { drawAnalytics(data, body); })
+        .catch(function (err) {
+          body.innerHTML = '<p class="jempty">Could not load: ' + aEsc(err) + '</p>';
+        });
+    }
+
+    function closeAnalytics() {
+      document.getElementById('amodal').classList.remove('open');
+    }
+
+    function drawAnalytics(data, host) {
+      var t = data.totals;
+      document.getElementById('asub').textContent =
+        t.reqs + ' reqs across ' + t.clients + ' client' + (t.clients === 1 ? '' : 's') +
+        (window.location.search ? ' - matching the current filter' : '');
+
+      if (!t.reqs) {
+        host.innerHTML = '<p class="jempty">No reqs to chart.</p>';
+        return;
+      }
+
+      var html = '<div class="jstats">' +
+        '<div class="jstat"><span>Submitted</span><b>' + t.submitted + '</b></div>' +
+        '<div class="jstat"><span>Openings</span><b>' + t.openings + '</b></div>' +
+        '<div class="jstat"><span>Per opening</span><b>' +
+          (t.openings ? (t.submitted / t.openings).toFixed(1) : '--') + '</b></div>' +
+        '<div class="jstat"><span>Reqs with none</span><b>' +
+          data.clients.reduce(function (n, c) {
+            return n + c.reqs.filter(function (r) { return !r.submitted; }).length; }, 0) +
+        '</b></div></div>';
+
+      // the widest bar sets the scale: submitted, or the opening count if larger
+      var most = 1;
+      data.clients.forEach(function (c) {
+        c.reqs.forEach(function (r) { most = Math.max(most, r.submitted, r.qty); });
+      });
+
+      data.clients.forEach(function (c) {
+        html += '<div class="agroup"><div class="ahead">' + aEsc(c.client) +
+                '<span>' + c.submitted + ' submitted / ' + c.openings + ' open</span></div>';
+        c.reqs.forEach(function (r) {
+          var pct = (r.submitted / most) * 100;
+          var target = (r.qty / most) * 100;
+          var full = r.qty && r.submitted >= r.qty;
+          html += '<div class="abar">' +
+            '<span class="alabel" title="' + aEsc(r.label) + '">' + aEsc(r.label) + '</span>' +
+            '<span class="atrack">' +
+              '<i class="afill' + (full ? ' full' : '') + '" style="width:' + pct + '%"></i>' +
+              (r.qty ? '<i class="atarget" style="left:' + target + '%" title="' +
+                        r.qty + ' opening(s)"></i>' : '') +
+            '</span>' +
+            '<span class="acount">' + r.submitted +
+              (r.qty ? '<em>/' + r.qty + '</em>' : '') +
+              (r.dropped ? '<i class="adrop">+' + r.dropped + ' out</i>' : '') +
+            '</span></div>';
+        });
+        html += '</div>';
+      });
+
+      if (data.by_ta && data.by_ta.length) {
+        html += '<h3 class="jh3">By TA</h3><div class="atas">';
+        data.by_ta.forEach(function (pair) {
+          html += '<span class="chip chip-soft">' + aEsc(pair[0]) + ' ' + pair[1] + '</span>';
+        });
+        html += '</div>';
+      }
+
+      html += '<p class="jempty" style="padding:12px 2px 0;">' +
+              'Bar length is live candidates; the marker is the opening count. ' +
+              'Struck-out names are excluded.</p>';
+      host.innerHTML = html;
+    }
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { closeAnalytics(); }
+    });
+
     function addName(btn) {
       var card = btn.closest('.reqcard');
       var rid = card.querySelector('input[name=req_ids]').value;
@@ -619,6 +761,8 @@ _PAGE_BODY = """
         ' name="c_' + rid + '_name" oninput="markDirty()">' +
         '<input type="text" class="status60" placeholder="Status" maxlength="200"' +
         ' name="c_' + rid + '_status" oninput="markDirty()">' +
+        '<select name="c_' + rid + '_ta" class="ta2" title="TA" onchange="markDirty()">' +
+        TA_OPTIONS + '</select>' +
         '<input type="hidden" name="c_' + rid + '_struck" value="">' +
         '<input type="hidden" name="c_' + rid + '_green" value="">' +
         '<button type="button" class="rowmark strike" title="Strike this candidate out"' +
@@ -671,23 +815,7 @@ def reqs_page():
     kind = request.args.get("type", "").strip()
     prio = request.args.get("priority", "").strip()
 
-    shown = reqs
-    if client:
-        shown = [r for r in shown if r["Client"] == client]
-    if kind:
-        shown = [r for r in shown if r["Type"] == kind]
-    if prio:
-        shown = [r for r in shown if r["colour"] == prio]
-    if q:
-        needle = q.lower()
-
-        def hit(req):
-            fields = [str(req.get(h, "")) for h in REQ_HEADERS]
-            for cand in req["candidates"]:
-                fields += [cand.get("Name", ""), cand.get("Status", "")]
-            return any(needle in f.lower() for f in fields)
-
-        shown = [r for r in shown if hit(r)]
+    shown = filter_reqs(reqs, q, client, kind, prio)
 
     sort = request.args.get("sort", "").strip()
     direction = request.args.get("dir", "asc").strip()
@@ -703,6 +831,7 @@ def reqs_page():
         qty_choices=QTY_CHOICES,
         relocation_choices=RELOCATION_CHOICES,
         workauth_choices=WORKAUTH_CHOICES,
+        ta_choices=list(TA_CHOICES),
         type_choices=TYPE_CHOICES,
         colours=list(PRIORITY_COLOURS),
         meaning=PRIORITY_MEANING,
@@ -718,6 +847,55 @@ def reqs_page():
         notify_status=notify.status_line(),
         tab="reqs",
     )
+
+
+@bp.route("/reqs/analytics")
+def reqs_analytics():
+    """Candidates submitted against each requirement, grouped by client."""
+    reqs = filter_reqs(read_reqs(),
+                       request.args.get("q", "").strip(),
+                       request.args.get("client", "").strip(),
+                       request.args.get("type", "").strip(),
+                       request.args.get("priority", "").strip())
+
+    clients = {}
+    for req in reqs:
+        name = req["Client"] or "(no client)"
+        bucket = clients.setdefault(name, {"client": name, "reqs": [],
+                                           "submitted": 0, "openings": 0})
+        live = [c for c in req["candidates"] if not c.get("struck")]
+        bucket["reqs"].append({
+            "label": req["Req"] or req["Type"] or req["Req ID"][-4:],
+            "submitted": len(live),
+            "dropped": len(req["candidates"]) - len(live),
+            "qty": req["_qty"],
+            "colour": req["colour"],
+        })
+        bucket["submitted"] += len(live)
+        bucket["openings"] += req["_qty"]
+
+    ordered = sorted(clients.values(), key=lambda c: (-c["submitted"], c["client"]))
+    for bucket in ordered:
+        bucket["reqs"].sort(key=lambda r: -r["submitted"])
+
+    by_ta = {}
+    for req in reqs:
+        for cand in req["candidates"]:
+            if cand.get("struck"):
+                continue
+            key = cand.get("ta") or "unassigned"
+            by_ta[key] = by_ta.get(key, 0) + 1
+
+    return jsonify({
+        "clients": ordered,
+        "totals": {
+            "reqs": len(reqs),
+            "clients": len(ordered),
+            "submitted": sum(c["submitted"] for c in ordered),
+            "openings": sum(c["openings"] for c in ordered),
+        },
+        "by_ta": sorted(by_ta.items(), key=lambda kv: -kv[1]),
+    })
 
 
 @bp.route("/reqs/add", methods=["POST"])
@@ -768,6 +946,7 @@ def reqs_save():
 
         names = form.getlist(f"c_{req_id}_name")
         statuses = form.getlist(f"c_{req_id}_status")
+        tas = form.getlist(f"c_{req_id}_ta")
         struck = form.getlist(f"c_{req_id}_struck")
         green = form.getlist(f"c_{req_id}_green")
 
@@ -779,11 +958,13 @@ def reqs_save():
                 continue
             people.append({
                 "Name": name, "Status": status,
+                "TA": (tas[i] if i < len(tas) else "").strip(),
                 "Struck": bool((struck[i] if i < len(struck) else "").strip()),
                 "Highlight": bool((green[i] if i < len(green) else "").strip()),
             })
 
         was = [{"Name": c.get("Name", ""), "Status": c.get("Status", ""),
+                "TA": c.get("ta", ""),
                 "Struck": c.get("struck", False), "Highlight": c.get("green", False)}
                for c in current["candidates"]]
 
