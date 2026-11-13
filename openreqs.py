@@ -412,7 +412,8 @@ _PAGE_BODY = """
         <span><i class="dot prio-{{ c }}"></i>{{ meaning[c] }}</span>
       {% endfor %}
     </span>
-    {% if saved %}<span class="savedflash">Saved</span>{% endif %}
+    {% if saved and saved != "0" %}<span class="savedflash">Saved {{ saved }} req{% if saved != "1" %}s{% endif %}</span>{% elif saved == "0" %}<span class="savestate">Nothing had changed</span>{% endif %}
+    <span class="savestate" id="savestate">No unsaved changes</span>
 
     <span class="sortbar">
       <span style="font-size:12px; color:var(--ink-faint);">Sort:</span>
@@ -430,20 +431,25 @@ _PAGE_BODY = """
   </div>
 
   {% if reqs %}
+    <form method="post" action="/reqs/save" id="reqsave">
+      <input type="hidden" name="q" value="{{ q }}">
+      <input type="hidden" name="sort" value="{{ sort }}">
+      <input type="hidden" name="dir" value="{{ direction }}">
+
     {% for req in reqs %}
-      <form method="post" action="/reqs/save" class="reqcard">
-        <input type="hidden" name="req_id" value="{{ req['Req ID'] }}">
-        <input type="hidden" name="q" value="{{ q }}">
+      {% set rid = req['Req ID'] %}
+      <div class="reqcard">
+        <input type="hidden" name="req_ids" value="{{ rid }}">
 
         <div class="reqtop">
-          <input type="hidden" name="priority" value="{{ req.colour | priolabel }}">
+          <input type="hidden" name="r_{{ rid }}_priority" value="{{ req.colour | priolabel }}">
           <button type="button" class="prio prio-{{ req.colour }}" data-colour="{{ req.colour }}"
                   title="{{ req.colour | priolabel }} - {{ meaning[req.colour] }} - click to change"
                   onclick="cycleCard(this)"></button>
 
           <div class="reqfield qty">
             <label class="fieldlabel">Qty</label>
-            <select name="qty">
+            <select name="r_{{ rid }}_qty" onchange="markDirty()">
               {% for n in qty_choices %}
                 <option value="{{ n }}" {% if n == req.Qty %}selected{% endif %}>{{ n }}</option>
               {% endfor %}
@@ -451,15 +457,17 @@ _PAGE_BODY = """
           </div>
           <div class="reqfield grow">
             <label class="fieldlabel">Client</label>
-            <input type="text" name="client" value="{{ req.Client }}" list="clientlist">
+            <input type="text" name="r_{{ rid }}_client" value="{{ req.Client }}"
+                   list="clientlist" oninput="markDirty()">
           </div>
           <div class="reqfield grow">
             <label class="fieldlabel">Req</label>
-            <input type="text" name="req" value="{{ req.Req }}" placeholder="role or req number">
+            <input type="text" name="r_{{ rid }}_req" value="{{ req.Req }}"
+                   placeholder="role or req number" oninput="markDirty()">
           </div>
           <div class="reqfield auth">
             <label class="fieldlabel">Work Auth</label>
-            <select name="work_auth">
+            <select name="r_{{ rid }}_work_auth" onchange="markDirty()">
               {% for w in workauth_choices %}
                 <option value="{{ w }}" {% if w == req['Work Auth'] %}selected{% endif %}>{{ w }}</option>
               {% endfor %}
@@ -467,19 +475,19 @@ _PAGE_BODY = """
           </div>
           <div class="reqfield">
             <label class="fieldlabel">Date</label>
-            <input type="date" name="date" value="{{ req.Date }}">
+            <input type="date" name="r_{{ rid }}_date" value="{{ req.Date }}" onchange="markDirty()">
           </div>
           <div class="reqfield rate">
             <label class="fieldlabel">Rate</label>
-            <input type="text" name="rate" value="{{ req.Rate }}">
+            <input type="text" name="r_{{ rid }}_rate" value="{{ req.Rate }}" oninput="markDirty()">
           </div>
           <div class="reqfield grow">
             <label class="fieldlabel">Location</label>
-            <input type="text" name="location" value="{{ req.Location }}">
+            <input type="text" name="r_{{ rid }}_location" value="{{ req.Location }}" oninput="markDirty()">
           </div>
           <div class="reqfield">
             <label class="fieldlabel">Relocation</label>
-            <select name="relocation">
+            <select name="r_{{ rid }}_relocation" onchange="markDirty()">
               {% for r in relocation_choices %}
                 <option value="{{ r }}" {% if r == req.Relocation %}selected{% endif %}>{{ r }}</option>
               {% endfor %}
@@ -487,7 +495,7 @@ _PAGE_BODY = """
           </div>
           <div class="reqfield">
             <label class="fieldlabel">Type</label>
-            <select name="type">
+            <select name="r_{{ rid }}_type" onchange="markDirty()">
               {% for t in type_choices %}
                 <option value="{{ t }}" {% if t == req.Type %}selected{% endif %}>{{ t }}</option>
               {% endfor %}
@@ -500,42 +508,39 @@ _PAGE_BODY = """
             <span class="fieldlabel">Candidates</span>
             <span class="peoplecount">{{ req.candidates|length }} of {{ req.Qty or '?' }}</span>
             <button type="button" class="btn btn-sm addname" onclick="addName(this)">+ Add name</button>
+            <button class="btn btn-primary btn-sm" type="submit"
+                    title="Saves every req you have changed on this page">&#128190; Save</button>
+            <span class="reqid">{{ rid }}</span>
+            <button class="btn btn-danger btn-sm" type="submit" name="delete_id" value="{{ rid }}"
+                    formaction="/reqs/delete"
+                    onclick="return confirm('Delete this req and its {{ req.candidates|length }} candidate line(s)?');">
+              Delete
+            </button>
           </div>
 
           <div class="namelist">
             {% for cand in req.candidates %}
               <div class="namerow">
-                <input type="text" name="name" class="name20" value="{{ cand.Name }}"
-                       placeholder="Name" maxlength="60">
-                <input type="text" name="status" class="name20" value="{{ cand.Status }}"
-                       placeholder="Status" maxlength="60">
+                <input type="text" name="c_{{ rid }}_name" class="name20" value="{{ cand.Name }}"
+                       placeholder="Name" maxlength="60" oninput="markDirty()">
+                <input type="text" name="c_{{ rid }}_status" class="status60" value="{{ cand.Status }}"
+                       placeholder="Status" maxlength="200" oninput="markDirty()">
                 <button type="button" class="rowx" title="Remove this line"
                         onclick="dropName(this)">&times;</button>
               </div>
             {% endfor %}
-            <div class="namerow">
-              <input type="text" name="name" class="name20" placeholder="Name" maxlength="60">
-              <input type="text" name="status" class="name20" placeholder="Status" maxlength="60">
-              <button type="button" class="rowx" title="Remove this line"
-                      onclick="dropName(this)">&times;</button>
-            </div>
+            {% if not req.candidates %}
+              <p class="nonames">No names yet - press <b>+ Add name</b>.</p>
+            {% endif %}
           </div>
         </div>
-
-        <div class="reqfoot">
-          <button class="btn btn-primary" type="submit">&#128190; Save req</button>
-          <span class="reqid">{{ req['Req ID'] }}</span>
-          <button class="btn btn-danger" type="submit" formaction="/reqs/delete"
-                  onclick="return confirm('Delete this req and its {{ req.candidates|length }} candidate line(s)?');">
-            Delete
-          </button>
-        </div>
-      </form>
+      </div>
     {% endfor %}
+    </form>
 
     <p class="muted" style="font-size:12.5px; margin-top:14px;">
       <b>{{ workbook }}</b> &rarr; sheets <b>{{ req_sheet }}</b> and <b>{{ cand_sheet }}</b>.
-      Each card saves on its own.
+      One Save writes every req you have changed.
     </p>
   {% else %}
     <div class="panel empty">
@@ -545,6 +550,20 @@ _PAGE_BODY = """
   {% endif %}
 
   <script>
+    var dirty = false;
+    function markDirty() {
+      dirty = true;
+      var s = document.getElementById('savestate');
+      if (s) { s.textContent = 'Unsaved changes'; s.classList.add('dirty'); }
+    }
+    document.addEventListener('DOMContentLoaded', function () {
+      var form = document.getElementById('reqsave');
+      if (form) { form.addEventListener('submit', function () { dirty = false; }); }
+      window.addEventListener('beforeunload', function (e) {
+        if (dirty) { e.preventDefault(); e.returnValue = ''; }
+      });
+    });
+
     var PRIORITY = [['blue', 'Blue', 'Cold'], ['red', 'Red', 'Hot'],
                     ['yellow', 'Yellow', 'Warm'], ['green', 'Green', 'Room Temp']];
 
@@ -565,23 +584,42 @@ _PAGE_BODY = """
 
     function cycleCard(btn) {
       var next = nextColour(btn);
-      var hidden = btn.parentNode.querySelector('input[name=priority]');
+      var hidden = btn.parentNode.querySelector('input[type=hidden]');
       if (hidden) { hidden.value = next[1]; }
+      markDirty();
     }
 
     function addName(btn) {
-      var list = btn.closest('.reqpeople').querySelector('.namelist');
-      var row = list.querySelector('.namerow').cloneNode(true);
-      row.querySelectorAll('input').forEach(function (input) { input.value = ''; });
+      var card = btn.closest('.reqcard');
+      var rid = card.querySelector('input[name=req_ids]').value;
+      var list = card.querySelector('.namelist');
+
+      var empty = list.querySelector('.nonames');
+      if (empty) { empty.remove(); }
+
+      var row = document.createElement('div');
+      row.className = 'namerow';
+      row.innerHTML =
+        '<input type="text" class="name20" placeholder="Name" maxlength="60"' +
+        ' name="c_' + rid + '_name" oninput="markDirty()">' +
+        '<input type="text" class="status60" placeholder="Status" maxlength="200"' +
+        ' name="c_' + rid + '_status" oninput="markDirty()">' +
+        '<button type="button" class="rowx" title="Remove this line"' +
+        ' onclick="dropName(this)">&times;</button>';
       list.appendChild(row);
       row.querySelector('input').focus();
     }
 
     function dropName(btn) {
       var list = btn.closest('.namelist');
-      var row = btn.closest('.namerow');
-      if (list.querySelectorAll('.namerow').length > 1) { row.remove(); }
-      else { row.querySelectorAll('input').forEach(function (i) { i.value = ''; }); }
+      btn.closest('.namerow').remove();
+      markDirty();
+      if (!list.querySelector('.namerow')) {
+        var note = document.createElement('p');
+        note.className = 'nonames';
+        note.innerHTML = 'No names yet - press <b>+ Add name</b>.';
+        list.appendChild(note);
+      }
     }
   </script>
 </div>
@@ -668,30 +706,55 @@ def reqs_add():
     return redirect(url_for("openreqs.reqs_page", saved="1"))
 
 
+FORM_FIELDS = (("priority", "Priority"), ("qty", "Qty"), ("client", "Client"),
+               ("req", "Req"), ("work_auth", "Work Auth"), ("date", "Date"),
+               ("rate", "Rate"), ("location", "Location"),
+               ("relocation", "Relocation"), ("type", "Type"))
+
+
 @bp.route("/reqs/save", methods=["POST"])
 def reqs_save():
+    """Write every req on the page whose values or candidates actually changed."""
     form = request.form
-    req_id = (form.get("req_id", "") or "").strip()
-    if req_id:
-        save_req(req_id, {
-            "Priority": priority_label(priority_of(form.get("priority", ""))),
-            "Qty": (form.get("qty", "") or "").strip(),
-            "Client": (form.get("client", "") or "").strip(),
-            "Req": (form.get("req", "") or "").strip(),
-            "Work Auth": (form.get("work_auth", "") or "").strip(),
-            "Date": (form.get("date", "") or "").strip(),
-            "Rate": (form.get("rate", "") or "").strip(),
-            "Location": (form.get("location", "") or "").strip(),
-            "Relocation": (form.get("relocation", "") or "").strip(),
-            "Type": (form.get("type", "") or "").strip(),
-        }, form.getlist("name"), form.getlist("status"))
-    return redirect(url_for("openreqs.reqs_page", saved="1",
-                            q=form.get("q", "") or None))
+    before = {r["Req ID"]: r for r in read_reqs()}
+    saved = 0
+
+    for req_id in form.getlist("req_ids"):
+        req_id = (req_id or "").strip()
+        current = before.get(req_id)
+        if not current:
+            continue
+
+        values = {}
+        for field, header in FORM_FIELDS:
+            posted = (form.get(f"r_{req_id}_{field}", "") or "").strip()
+            if field == "priority":
+                posted = priority_label(priority_of(posted))
+            values[header] = posted
+
+        names = form.getlist(f"c_{req_id}_name")
+        statuses = form.getlist(f"c_{req_id}_status")
+        pairs = [(n.strip(), s.strip()) for n, s in zip(names, statuses)
+                 if n.strip() or s.strip()]
+        was = [(c.get("Name", ""), c.get("Status", "")) for c in current["candidates"]]
+
+        fields_changed = any(values[h] != current.get(h, "") for _, h in FORM_FIELDS)
+        if not fields_changed and pairs == was:
+            continue
+
+        save_req(req_id, values, [n for n, _ in pairs], [s for _, s in pairs])
+        saved += 1
+
+    return redirect(url_for("openreqs.reqs_page", saved=str(saved),
+                            q=form.get("q", "") or None,
+                            sort=form.get("sort", "") or None,
+                            dir=form.get("dir", "") or None))
 
 
 @bp.route("/reqs/delete", methods=["POST"])
 def reqs_delete():
-    req_id = (request.form.get("req_id", "") or "").strip()
+    req_id = (request.form.get("delete_id", "")
+              or request.form.get("req_id", "") or "").strip()
     if req_id:
         delete_req(req_id)
     return redirect(url_for("openreqs.reqs_page"))

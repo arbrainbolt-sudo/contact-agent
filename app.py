@@ -1988,9 +1988,15 @@ STYLE = """
     .peoplehead { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
     .peoplecount { font-size: 12px; color: var(--ink-faint); }
     .peoplehead .addname { margin-left: auto; }
+    .peoplehead { flex-wrap: wrap; }
     .namelist { display: flex; flex-direction: column; gap: 7px; }
     .namerow { display: flex; gap: 8px; align-items: center; }
     input.name20 { width: 20ch; min-width: 20ch; font-size: 13px; }
+    input.status60 { width: 60ch; min-width: 60ch; font-size: 13px; }
+    .nonames { font-size: 12.5px; color: var(--ink-faint); margin: 2px 0 0; }
+    .peoplehead .btn-primary { margin-left: 4px; }
+    .peoplehead .reqid { margin-left: auto; }
+    .peoplehead .btn-danger { margin-left: 4px; }
     .rowx {
       background: none; border: 0; cursor: pointer; font-size: 19px; line-height: 1;
       color: var(--ink-faint); padding: 0 4px;
